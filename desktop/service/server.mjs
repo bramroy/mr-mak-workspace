@@ -5,6 +5,8 @@ import { watch } from 'node:fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { parse as parseEnv } from 'dotenv';
 import { Sessions } from './sessions.mjs';
+import { BrowserTabs } from './browser-tabs.mjs';
+import { BobQuestions } from './bob-questions.mjs';
 import { Coordinator, openChatArguments } from './coordinator.mjs';
 import { ClaudeCoordinator } from './coordinator-claude.mjs';
 import { Overseer } from './overseer.mjs';
@@ -74,6 +76,8 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const integrations = await new IntegrationManager(stateDir).init();
   const mcp = new McpInventory(repo, mcpOptions);
   const sessions = await new Sessions(repo, stateDir).init();
+  const browserTabs = await new BrowserTabs(stateDir).init();
+  const bobQuestions = await new BobQuestions(stateDir).init();
   const transcripts = new ConversationTranscripts();
   const claudeSessions = new ClaudeSessions(), sideQuestions = new SideQuestions(sessions);
   const coldGuard = new ColdGuard();
@@ -118,6 +122,8 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const notices = [];
   const send = (ws, type, value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, ...value })); };
   const broadcast = (type, value) => { for (const ws of clients) send(ws, type, value); };
+  browserTabs.changed = state => broadcast('browser-tabs', state);
+  bobQuestions.changed = state => broadcast('bob-questions', state);
   const games = new GameRunner();
   games.on('changed', cwd => broadcast('game', { path: cwd, status: games.status(cwd) }));
   const gameState = async cwd => ({ ...await readGame(cwd), status: games.status(cwd) });
@@ -186,6 +192,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'read_context': return knowledge.read(args.path, args.offset);
         case 'list_skills': return knowledge.skills(args.query || '');
         case 'list_mcp': return mcp.list();
+        case 'ask_bob': return bobQuestions.create(args);
         case 'get_app_settings': return { voice: settings.voiceName, style: settings.voiceStyle, coordinator: coordinator.provider === 'claude' ? 'Claude Code' : 'Codex', model: coordinator.model || 'default', effort: settings.coordinatorEffort, billing: `${coordinator.provider === 'claude' ? 'Claude' : 'Codex'} subscription for the coordinator; OpenAI API for voice` };
         case 'update_voice': {
           if (typeof args.style === 'string' && args.style.trim()) settings.voiceStyle = args.style.trim().slice(0, 1800);
@@ -287,7 +294,22 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'POST' && url.pathname === '/api/mobile/revoke') return json(response, 200, await mobile.revoke(data.id));
         if (method === 'GET' && url.pathname === '/api/bootstrap') {
           const keys = parseEnv(await readFile(path.join(repo, '.env'), 'utf8').catch(() => ''));
-          return json(response, 200, { repo, contentBase: `${files.origin}/view/${files.repoGrant}`, agents: inventory(), sessions: sessions.list(), settings, selectedId, notices, coordinator: coordinator.state, voice: { configured: !!(keys.OPENAI_API_KEY || keys.OPENAI_KEY || process.env.OPENAI_API_KEY), owner: voiceOwner }, voiceHistory, operations: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-30) });
+          return json(response, 200, { browserTabs: browserTabs.state(), bobQuestions: bobQuestions.list(), repo, contentBase: `${files.origin}/view/${files.repoGrant}`, agents: inventory(), sessions: sessions.list(), settings, selectedId, notices, coordinator: coordinator.state, voice: { configured: !!(keys.OPENAI_API_KEY || keys.OPENAI_KEY || process.env.OPENAI_API_KEY), owner: voiceOwner }, voiceHistory, operations: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-30) });
+        }
+        // Browser-backed chats never inherit terminal-agent permissions.
+        if (url.pathname === '/api/bob-questions' && method === 'GET') return json(response, 200, { questions: bobQuestions.list() });
+        const bobDismiss = /^\/api\/bob-questions\/([a-f0-9-]{36})\/dismiss$/.exec(url.pathname);
+        if (bobDismiss && method === 'POST') return json(response, 200, await bobQuestions.dismiss(bobDismiss[1]));
+        if (url.pathname === '/api/browser-tabs' && method === 'GET') return json(response, 200, browserTabs.state());
+        if (url.pathname === '/api/browser-tabs' && method === 'POST') return json(response, 201, await browserTabs.create(data));
+        const browserTab = /^\/api\/browser-tabs\/([a-f0-9-]{36})(?:\/(select|reopen))?$/.exec(url.pathname);
+        if (browserTab) {
+          const [, id, action] = browserTab;
+          if (action === 'select' && method === 'POST') return json(response, 200, await browserTabs.select(id));
+          if (action === 'reopen' && method === 'POST') return json(response, 200, await browserTabs.reopen(id));
+          if (!action && method === 'PATCH') return json(response, 200, await browserTabs.patch(id, data));
+          if (!action && method === 'DELETE') return json(response, 200, await browserTabs.close(id));
+          throw Object.assign(new Error('Unsupported browser-tab operation'), { status: 405 });
         }
         if (method === 'GET' && url.pathname === '/api/workspace') return json(response, 200, await registry());
         if (method === 'POST' && url.pathname === '/api/workspace/cards') return json(response, 201, await cards.create(data));
@@ -598,7 +620,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   try { watcher = watch(path.join(repo, 'workspace', 'workspace.json'), () => broadcast('workspace-changed', {})); watcher.on('error', () => {}); } catch { /* Registry may be created after first setup. */ }
   const restoreTimer = restoreSessions ? setTimeout(() => sessions.restore().catch(error => sessions.emit('service-error', error)), 100) : null;
   return {
-    origin, contentOrigin: files.origin, token, sessions, handoffs, get coordinator() { return coordinator; }, quick, workspace, cards, files, projects, knowledge, integrations, mobile,
+    origin, contentOrigin: files.origin, token, sessions, browserTabs, bobQuestions, handoffs, get coordinator() { return coordinator; }, quick, workspace, cards, files, projects, knowledge, integrations, mobile,
     urls: { workspace: `${origin}/?desktop=1&surface=workspace&token=${token}`, chats: `${origin}/?desktop=1&surface=chats&token=${token}` },
       nativeMessage: event => nativeSettings.receive(event),
       async close() {

@@ -317,3 +317,27 @@ button.chat-status-usage:focus-visible{outline:2px solid color-mix(in srgb,var(-
 .cache-chip.cold{color:#f0a35e}.cache-chip.cold i{background:#f0a35e}
 button.cache-chip{padding:0;border:0;background:transparent;font:inherit;font-size:9.5px;cursor:pointer}button.cache-chip:hover{color:var(--text)}button.cache-chip:focus-visible{outline:1px solid var(--pink);outline-offset:2px;border-radius:3px}
 .conversation-status.long{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45;color:#f0a35e}
+
+/* Bob browser tabs live in the same chat strip, while remote pages remain native. */
+.bob-tabs{display:flex;flex-wrap:wrap;gap:2px;padding:3px 0;align-items:stretch;min-width:0}
+.bob-tabs .bob-tab{height:34px;max-width:210px;gap:3px;padding:0 4px;overflow:visible}
+.bob-tabs .bob-tab.selected{background:color-mix(in srgb,var(--pink) 10%,transparent);border-bottom:2px solid var(--pink)}
+.bob-tabs .bob-tab .chat-tab-select{display:flex;align-items:center;gap:5px;min-width:0;max-width:142px;border:0;background:transparent;font-size:11px;padding:5px}
+.bob-tabs .bob-tab .chat-tab-name{overflow:hidden;text-overflow:ellipsis}
+.bob-view{position:relative;display:flex;flex:1;min-height:0;flex-direction:column;background:var(--bg)}
+.bob-view-heading{display:flex;gap:8px;align-items:center;justify-content:space-between;border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent);height:37px;padding:0 15px;flex-shrink:0}
+.bob-view-heading strong{display:flex;align-items:center;gap:6px;font-size:11px}
+.bob-view-heading button,.bob-questions button{border:1px solid color-mix(in srgb,var(--text) 18%,transparent);border-radius:6px;padding:5px 9px;background:var(--surface-solid);font-size:11px}
+.bob-native-region{flex:1;min-height:0;position:relative}
+.bob-browser-fallback{max-width:450px;margin:70px auto;text-align:center;line-height:1.6;padding:20px}
+.bob-browser-fallback a{color:var(--pink)}
+.bob-questions{position:absolute;z-index:80;top:38px;right:5px;width:min(440px,calc(100% - 10px));max-height:60%;overflow-y:auto;box-shadow:0 18px 55px #0009;background:var(--surface-solid);border:1px solid color-mix(in srgb,var(--text) 18%,transparent);border-radius:8px;padding:15px}
+.bob-questions>div{padding:10px 0;border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent)}
+.bob-questions textarea{display:block;width:100%;margin:6px 0;border-radius:5px;padding:8px;background:var(--bg);color:var(--text);border:1px solid color-mix(in srgb,var(--text) 18%,transparent);resize:vertical}
+.bob-questions button{margin-right:7px}
+
+
+.chat-tabs-slot{display:flex;flex-wrap:wrap;align-items:flex-start;align-content:flex-start;min-width:0;flex:1}
+.chat-tabs-slot>.chat-tabs{flex:0 1 auto;max-width:100%;overflow:hidden}
+.chat-tabs-slot>.bob-tabs{flex:0 1 auto;max-width:100%;padding-left:8px}
+.chat-tabs-row>.chat-tab-actions{margin-left:auto}
