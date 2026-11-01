@@ -27,7 +27,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
-      - run: node --test desktop/service/test/browser-tabs.test.mjs desktop/service/test/browser-tabs-api.test.mjs desktop/service/test/bob-questions.test.mjs desktop/service/test/bob-native-acl.test.mjs
+      - run: node --test desktop/service/test/browser-tabs.test.mjs desktop/service/test/browser-tabs-api.test.mjs desktop/service/test/bob-questions.test.mjs desktop/service/test/bob-native-acl.test.mjs desktop/service/test/brand-assets.test.mjs
       - name: Prepare bundled Node and Tauri resources
         run: npm run desktop:prepare
       - name: Check native Bob URL and IPC guards
