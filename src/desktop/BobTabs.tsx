@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, onServiceEvent, reportError } from './client'
 import { Icon } from './Icons'
-import { bobNative, type BobTab } from './bobSessionState'
+import { bobNative, hasBobNative, type BobTab } from './bobSessionState'
 
 export function BobTabStrip({ tabs, selectedId, choose, close, patch }: {
   tabs: BobTab[]; selectedId: string | null; choose: (id: string) => void
@@ -29,7 +29,7 @@ export function BobBrowserPanel({ tab, tabs, patch, suspended }: {tab: BobTab; t
   const region = useRef<HTMLDivElement>(null)
   const [questions,setQuestions] = useState<BobQuestion[]>([])
   const [inbox,setInbox] = useState(false)
-  const nativeAvailable = !!window.chrome?.webview
+  const nativeAvailable = hasBobNative()
   const refresh = () => api<{questions:BobQuestion[]}>('/bob-questions').then(result => setQuestions(result.questions)).catch(reportError)
   useEffect(() => {refresh();return onServiceEvent(event => {if(event.type==='bob-questions')refresh()})},[])
   useEffect(() => {

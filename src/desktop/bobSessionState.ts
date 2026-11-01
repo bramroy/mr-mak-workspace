@@ -8,8 +8,16 @@ export interface BobTab {
 }
 interface TabState { tabs: BobTab[]; selectedId: string | null }
 interface Bridge { postMessage: (message: object) => void }
-declare global { interface Window { chrome?: { webview?: Bridge } } }
-export const bobNative = (message: object) => window.chrome?.webview?.postMessage(message)
+interface NativeInvoke { invoke: (command: string, args?: object) => Promise<unknown> }
+declare global { interface Window { chrome?: { webview?: Bridge }; __TAURI_INTERNALS__?: NativeInvoke } }
+export const hasBobNative = () => !!window.__TAURI_INTERNALS__?.invoke || !!window.chrome?.webview
+export function bobNative(message: object) {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    void window.__TAURI_INTERNALS__.invoke('bob_native', { message }).catch(reportError)
+  } else {
+    window.chrome?.webview?.postMessage(message) // Standalone WinForms acceptance proof
+  }
+}
 
 export function useBobTabs() {
   const [state, setState] = useState<TabState>({ tabs: [], selectedId: null })

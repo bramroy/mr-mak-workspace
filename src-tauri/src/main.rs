@@ -4,6 +4,7 @@ use std::{fs, io::{BufRead, BufReader, Write}, path::PathBuf, process::{Child, C
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem}, tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState}};
 use tauri_plugin_window_state::StateFlags;
 mod external_links;
+mod bob_tabs;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
@@ -377,6 +378,7 @@ fn guarded_setup(app: &mut tauri::App, setup: impl FnOnce(&mut tauri::App) -> Re
 
 fn main() {
     let result = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![bob_tabs::bob_native])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if args.iter().any(|arg| arg == "--quit") { app.exit(0); }
             else if let Some(label) = requested_window(&args) { reveal(app, label); }
