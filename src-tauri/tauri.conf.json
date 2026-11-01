@@ -10,7 +10,7 @@
   "app": {
     "windows": [],
     "security": {
-      "capabilities": []
+      "capabilities": ["bob-native-from-local-chats"]
     }
   },
   "bundle": {

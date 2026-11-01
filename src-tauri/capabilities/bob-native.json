@@ -1,0 +1,16 @@
+{
+    "identifier":  "bob-native-from-local-chats",
+    "description":  "Permit only the trusted localhost Chats webview to manage Bob browser child views. Never grant this capability to remote ChatGPT child webviews.",
+    "webviews":  [
+                     "chats"
+                 ],
+    "local":  false,
+    "remote":  {
+                   "urls":  [
+                                "http://127.0.0.1:*/*"
+                            ]
+               },
+    "permissions":  [
+                        "allow-bob-native"
+                    ]
+}
