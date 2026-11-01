@@ -33,7 +33,7 @@ export function BobBrowserPanel({ tab, tabs, suspended }: {tab: BobTab; tabs: Bo
   const refresh = () => api<{questions:BobQuestion[]}>('/bob-questions').then(result => setQuestions(result.questions)).catch(reportError)
   useEffect(() => {refresh();return onServiceEvent(event => {if(event.type==='bob-questions')refresh()})},[])
   useEffect(() => {
-    if (suspended) { bobNative({ type: "bob-hide" }); return }
+    if (suspended || inbox) { bobNative({ type: "bob-hide" }); return }
     const update = () => {
       const element = region.current
       if (!element) return
@@ -46,14 +46,14 @@ export function BobBrowserPanel({ tab, tabs, suspended }: {tab: BobTab; tabs: Bo
     update()
     window.addEventListener('resize',update)
     return () => { observer.disconnect();window.removeEventListener('resize',update);bobNative({type:'bob-hide'}) }
-  },[tab.id,tab.url,tabs,suspended])
+  },[tab.id,tab.url,tabs,suspended,inbox])
   return <div className="bob-view">
     <div className="bob-view-heading"><strong><Icon name="message-circle" size={15}/>{tab.name}</strong>
       <button onClick={() => {setInbox(!inbox);if(!inbox)refresh()}}><Icon name="inbox" size={14}/> Ask Bob inbox {questions.length ? '('+questions.length+')':''}</button></div>
-    {inbox && <div className="bob-questions"><strong>Review the coordinator's question before sending it</strong>
-      {!questions.length && <p>No questions waiting.</p>}
+    {inbox && <div className="bob-questions" role="dialog" aria-label="Ask Bob review inbox"><strong>Review the coordinator's question before sending it</strong><p>Questions are drafts until you copy them into a Bob conversation and press Send.</p>
+      {!questions.length && <p>No questions waiting. Ask the Mr. Mak coordinator to queue an architectural question for Bob.</p>}
       {questions.map(q=><div key={q.id}><b>{q.title}</b><textarea readOnly rows={3} value={q.question} aria-label={q.title}/>
-        <button onClick={() => navigator.clipboard.writeText(q.question).catch(reportError)}>Copy</button>
+        <button onClick={() => navigator.clipboard.writeText(q.question).catch(reportError)}>Copy for Bob</button>
         <button onClick={() => api('/bob-questions/'+q.id+'/dismiss',{}).then(refresh).catch(reportError)}>Dismiss</button></div>)}
       <button onClick={() => setInbox(false)}>Close inbox</button></div>}
     <div className="bob-native-region" ref={region}>
