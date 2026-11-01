@@ -25,7 +25,7 @@ export function BobTabStrip({ tabs, selectedId, choose, close, patch }: {
 }
 
 interface BobQuestion { id: string; title: string; question: string; status: string }
-export function BobBrowserPanel({ tab, tabs, patch, suspended }: {tab: BobTab; tabs: BobTab[]; patch: (id: string, data: object) => void; suspended: boolean}) {
+export function BobBrowserPanel({ tab, tabs, suspended }: {tab: BobTab; tabs: BobTab[]; suspended: boolean}) {
   const region = useRef<HTMLDivElement>(null)
   const [questions,setQuestions] = useState<BobQuestion[]>([])
   const [inbox,setInbox] = useState(false)
@@ -45,13 +45,8 @@ export function BobBrowserPanel({ tab, tabs, patch, suspended }: {tab: BobTab; t
     if(region.current)observer.observe(region.current)
     update()
     window.addEventListener('resize',update)
-    const changed=(event: Event) => {
-      const data=(event as CustomEvent<{id:string;url:string}>).detail
-      if(data?.id===tab.id && data.url!==tab.url && data.url.startsWith('https://chatgpt.com/')) patch(data.id,{url:data.url})
-    }
-    window.addEventListener('bob-webview-url',changed)
-    return () => { observer.disconnect();window.removeEventListener('resize',update);window.removeEventListener('bob-webview-url',changed);bobNative({type:'bob-hide'}) }
-  },[tab.id,tab.url,tabs,patch,suspended])
+    return () => { observer.disconnect();window.removeEventListener('resize',update);bobNative({type:'bob-hide'}) }
+  },[tab.id,tab.url,tabs,suspended])
   return <div className="bob-view">
     <div className="bob-view-heading"><strong><Icon name="message-circle" size={15}/>{tab.name}</strong>
       <button onClick={() => {setInbox(!inbox);if(!inbox)refresh()}}><Icon name="inbox" size={14}/> Ask Bob inbox {questions.length ? '('+questions.length+')':''}</button></div>

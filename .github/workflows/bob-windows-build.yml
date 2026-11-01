@@ -28,6 +28,8 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: node --test desktop/service/test/browser-tabs.test.mjs desktop/service/test/browser-tabs-api.test.mjs desktop/service/test/bob-questions.test.mjs
+      - name: Prepare bundled Node and Tauri resources
+        run: npm run desktop:prepare
       - name: Check native Bob URL and IPC guards
         run: cargo test --manifest-path src-tauri/Cargo.toml bob_tabs::tests
       - name: Build native Windows Tauri executable and installer

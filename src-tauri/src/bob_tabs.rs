@@ -56,8 +56,24 @@ fn permitted_webview(caller: &Webview) -> bool {
         url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
 }
 
+// WebView2's current URL includes same-document history.pushState changes.
+// Save the actual ChatGPT conversation URL when tabs switch, even when the
+// website changed route without triggering an ordinary page-load event.
+fn report_url(window: &tauri::Window, view: &Webview) {
+    let Some(id) = view.label().strip_prefix("bob-") else { return };
+    let Ok(url) = view.url() else { return };
+    let Some(url) = chat_url(url.as_str()) else { return };
+    if let Some(chats) = window.webviews().into_iter().find(|view| view.label() == "chats") {
+        let detail = serde_json::json!({"id": id, "url": url.as_str()});
+        let _ = chats.eval(format!(
+            "window.dispatchEvent(new CustomEvent('bob-webview-url', {{detail: {detail}}}))"
+        ));
+    }
+}
+
 fn hide_children(window: &tauri::Window) {
     for view in window.webviews().iter().filter(|view| view.label().starts_with("bob-")) {
+        report_url(window, view);
         let _ = view.hide();
     }
 }
@@ -81,6 +97,7 @@ pub async fn bob_native(
         "bob-close" => {
             let id = message.get("id").and_then(Value::as_str).ok_or("Missing tab ID")?;
             if let Some(view) = app.get_webview(&label(id)?) {
+                report_url(&window, &view);
                 view.close().map_err(|e| e.to_string())?;
             }
             Ok(())

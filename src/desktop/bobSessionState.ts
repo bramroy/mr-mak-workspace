@@ -31,6 +31,16 @@ export function useBobTabs() {
       }
     })
   }, [])
+  // Keep the URL capture alive even after the selected Bob pane unmounts.
+  useEffect(() => {
+    const capture = (event: Event) => {
+      const detail = (event as CustomEvent<{ id: string; url: string }>).detail
+      if (!detail?.id || !detail.url || state.tabs.find(tab => tab.id === detail.id)?.url === detail.url) return
+      api('/browser-tabs/' + detail.id, { url: detail.url }, 'PATCH').catch(reportError)
+    }
+    window.addEventListener('bob-webview-url', capture)
+    return () => window.removeEventListener('bob-webview-url', capture)
+  }, [state.tabs])
   const selected = showBob ? state.tabs.find(item => item.open && item.id === state.selectedId) || null : null
   const leave = () => { setShowBob(false); localStorage.setItem('mrmak.bobActive','0'); bobNative({ type: 'bob-hide' }) }
   const choose = (id: string) => {
