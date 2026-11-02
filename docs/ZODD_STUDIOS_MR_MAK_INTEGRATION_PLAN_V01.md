@@ -1,7 +1,7 @@
 # Zodd Studios — Mr. Mak Integration & Coordinator Acceptance Plan V01
 
 **Owner:** Bob (Mr. Mak integration / architecture), with implementation and independent proof delegated by named assignment.  
-**Status:** Proposed delivery baseline; no production promotion or coordinator cutover authorized.  
+**Status:** Proposed delivery baseline; no production promotion or coordinator cutover authorized. **Creator clarification, 2026-11-02:** recovered legacy Claude/OpenCode sessions were test fixtures for the cockpit, not production sessions requiring migration or preservation as a release gate.  
 **Date:** 2026-11-02. **Candidate branch:** `bob/browser-backed-tabs-v01`; reference SHA before this document: `1373c22c3e7897d37b51085c1e3730baff6fa06f`.
 
 ## 1. Decision and scope
@@ -35,7 +35,7 @@ Desired outcome: a recoverable, stable native Windows cockpit, optional Zodd Stu
 **Accountable:** Bob integration. **Execution:** designated local operator; independent verification by another agent.
 
 - Confirm exact candidate Git SHA, existing installed app version/location, Windows-native installer artifact and hashes, running sessions, WebView2 profile location and current project selection.
-- Back up installed binary, settings, **all** session metadata, saved Bob links/drafts and separate WebView2 profile into an approved private location. Keep credentials, cookies, transcripts and `.mrmak/` **out of public Git**. Record hashes, backup path privately and perform a restoration to an isolated sandbox.
+- Back up installed binary, current settings, **current** Bob conversation links/drafts and active login/profile into an approved private location. Legacy recovered agent sessions were only test fixtures and are **not** required for production migration or restoration. Keep credentials, cookies, transcripts and `.mrmak/` **out of public Git**. Record hashes, backup path privately and perform a restoration to an isolated sandbox.
 - Confirm upstream divergence and safe rollback. Never move original repository pointers, interrupt live workers or overwrite installed app to run proof.
 
 **Gate M0:** **PASS** only with a manifest plus isolated restore and named custodian. Existing copies without restore = **NOT RUN**.
@@ -45,7 +45,7 @@ Desired outcome: a recoverable, stable native Windows cockpit, optional Zodd Stu
 **Implementation:** bounded Tauri/React worker. **Verifier:** independent Windows operator plus creator visual witness.
 
 On the *same exact candidate build*:
-- Open two real Bob/ChatGPT conversations alongside existing Claude/OpenCode terminals; tab switch, rename, close/reopen and app restart without losing links, draft composition or worker sessions. Prove ChatGPT login survives restart using its isolated profile.
+- Open two real Bob/ChatGPT conversations alongside fresh Claude/OpenCode terminals; tab switch, rename, close/reopen and app restart without losing current links, draft composition or **newly created** worker sessions. Former proof sessions need not reappear. Prove ChatGPT login survives restart using its isolated profile.
 - Test focus, scrolling, clipping and tab switches, secondary-monitor/DPI movement and window resizing. Test inbox open/copy/close/return; child WebView2 must not cover the inbox. **No automatic ChatGPT sends.**
 - Negative security proof: untrusted ChatGPT origins cannot invoke privileged native IPC, read local bearer tokens, issue terminal/file actions or drive coordinator tools. URL/domain allowlist must refuse unsafe destinations. Confirm remote login/auth is not being passed as local service credentials.
 - Record OAuth popups, attachments and voice separately as PASS/FAIL/NOT RUN. If some unsupported, clearly disclose and obtain a scoped release disposition; don't invent parity.
@@ -56,9 +56,9 @@ On the *same exact candidate build*:
 
 **Implementation:** agent-integration worker. **Verifier:** independent reviewer.
 
-- Confirm Claude and OpenCode continue using their existing subscriptions/sessions and that reopening the cockpit does not spawn or kill workers unexpectedly.
+- Confirm fresh Claude and OpenCode sessions work with their configured provider/subscription routes, and reopening the cockpit does not unexpectedly spawn or kill **current** workers. Recovery of legacy proof sessions is **not a gate**.
 - Install or locate native Codex CLI **only in an explicitly approved local setup**, connect it to Mr. Mak's existing `Codex` agent path, verify real model/provider and login, and complete one harmless prompt in its native tab.
-- Preserve the old **OpenCode → Codex** conversations as OpenCode history; do not relabel them as native Codex, silently migrate private session stores or require additional API keys/billing.
+- Do not relabel old **OpenCode → Codex** proof records as native Codex or silently migrate private session stores. Those historical sessions are **not required for go-live**; no extra API keys/billing are assumed.
 - Test a missing/unconfigured Codex CLI refusal with a clear recovery message instead of an inert or misleading tab.
 
 **Gate M2:** witnessed native Codex session **PASS**, existing sessions remain intact, no surprise billing/config rewrite.
@@ -93,7 +93,7 @@ Use an isolated, disposable **non-game** task with no production merge:
 
 - Compare exactly approved CI artifact/commit hash to candidate; check installer safety and isolate a rollback rehearsal on a copy. Ensure protected local profiles and old installed state recover.
 - Choose a quiet window with creator permission; **do not automatically restart** Mr. Mak or disrupt working agents. Install, launch and rerun M1/M2 smoke tests against the installed app, then repeat a short M3 continuity check.
-- If regression occurs, restore the original installed build and separately protected state. Record exact PASS/FAIL/NOT RUN rather than declaring installation a success.
+- If regression occurs, restore the original installed build and separately protected **current** state. Historic test-session restoration is optional, not a reason to delay promotion. Record exact PASS/FAIL/NOT RUN rather than declaring installation a success.
 - Publish an operations note: how to open the correct Bob conversation, route Ask Bob drafts, start native Codex, recover sessions, find GitHub receipts and back out safely.
 
 **Gate M5:** user-observed installed version, verified restore path, creator signoff. **The old coordination workflow's retirement requires M3/M5 plus the separate producer's audit; nothing here silently authorizes retirement.**
@@ -120,4 +120,4 @@ Use one durable issue/PR/commit receipt per task. No second shadow backlog in Mr
 4. **Coordinator proof owner:** define disposable M3 task and agent handoff receipts. Do not claim Sonnet ready based on a contract, and do not let M3 hold up 3.5.
 5. **After gates:** personalize, rehearse rollback, request creator approval for promotion.
 
-**Explicitly NOT RUN now:** local backup restore; native GUI/login stress on the exact final build; security/UI operator witness; native Codex; live Sonnet coordinator; installed promotion; retirement. This file is a **plan and accountability baseline**, not proof that these actions happened.
+**Explicitly NOT RUN now:** local backup restore of the **current** cockpit state; native GUI/login stress on the exact final build; security/UI operator witness; native Codex; live Sonnet coordinator; installed promotion; retirement. This file is a **plan and accountability baseline**, not proof that these actions happened.
