@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { open, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { readJson, saveJson } from './util.mjs';
+import { verifyReceipt, fingerprint } from './test-receipts.mjs';
 
 // The coordinator's durable record of who owns what. GitHub stays the source of truth: every receipt and verdict
 // carries the commit and link a person can open, and this file only remembers them across a restart or a hand-over.
@@ -27,7 +28,18 @@ export async function githubChecks({ repo, sha, token, fetchImpl = fetch }) {
   const data = await response.json();
   const runs = Array.isArray(data.check_runs) ? data.check_runs : [];
   if (!runs.length) throw new Error(`GitHub has no check runs for ${repo}@${String(sha).slice(0, 8)}. No checks is not a pass.`);
-  return runs.map(run => ({ name: String(run.name), result: checkResult(run), executed: executedTests(run), url: run.html_url || null }));
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  return Promise.all(runs.map(async run => {
+    let executed = executedTests(run);
+    // Actions jobs leave a check run's own output empty; a step publishes the count as an annotation (scripts/emit-test-count.mjs).
+    if (executed == null && run.id && run.output?.annotations_count > 0) {
+      try {
+        const notes = await fetchImpl(`https://api.github.com/repos/${repo}/check-runs/${run.id}/annotations?per_page=50`, { headers });
+        if (notes.ok) executed = executedTests({ output: { text: (await notes.json()).map(note => `${note.title || ''} ${note.message || ''}`).join('\n') } });
+      } catch { /* No count is no evidence. */ }
+    }
+    return { name: String(run.name), result: checkResult(run), executed, url: run.html_url || null };
+  }));
 }
 
 // A green check run only says the job exited cleanly. It does not say the tests ran: a job that skips its suite is green too.
@@ -88,7 +100,7 @@ export class Assignments {
   // verify: async ({ repo, sha }) => [{ name, result }] from GitHub. Without it, receipts stay unverified and cannot close a task.
   constructor({ stateDir, dispatcherId = null, verify = null, pid = process.pid, openGates = false }) {
     Object.assign(this, { stateDir, verify, pid, openGates }); // openGates exists for tests of other rules; the service never sets it.
-    this.file = path.join(stateDir, 'assignments.json'); this.charterFile = path.join(stateDir, 'coordinator-charter.json'); this.lockFile = path.join(stateDir, 'dispatcher.lock'); this.cutoverFile = path.join(stateDir, 'cutover.json');
+    this.file = path.join(stateDir, 'assignments.json'); this.charterFile = path.join(stateDir, 'coordinator-charter.json'); this.lockFile = path.join(stateDir, 'dispatcher.lock'); this.cutoverFile = path.join(stateDir, 'cutover.json'); this.runnersFile = path.join(stateDir, 'runners.json'); this.receiptsDir = path.join(stateDir, 'test-receipts'); this.runners = [];
     this.tasks = new Map(); this.dispatcherId = dispatcherId; this.charter = DEFAULT_CHARTER; this.readOnly = null; this.cutover = { approved: null };
   }
   // One process may act as this state directory's dispatcher. A second one reads, and refuses to change anything.
@@ -118,12 +130,13 @@ export class Assignments {
     this.dispatcherId = this.dispatcherId || `dispatcher-${randomUUID().slice(0, 8)}`;
     if (typeof charter?.text === 'string' && charter.text.trim()) this.charter = charter.text;
     this.cutover = { approved: null, ...(await readJson(this.cutoverFile, {})) };
+    this.runners = (await readJson(this.runnersFile, { runners: [] })).runners || [];
     await this.acquire();
     if (!this.readOnly) await saveJson(this.charterFile, { dispatcherId: this.dispatcherId, text: this.charter });
     return this;
   }
   async save() { this.writable(); await saveJson(this.file, { tasks: [...this.tasks.values()] }); this.onChange?.(); }
-  snapshot(identity = null) { const all = [...this.tasks.values()]; return { dispatcher: this.dispatcherId, readOnly: this.readOnly, identity, gates: this.gates(identity), charter: this.charter, open: all.filter(task => task.status !== 'closed'), closed: all.filter(task => task.status === 'closed').slice(-20) }; }
+  snapshot(identity = null) { const all = [...this.tasks.values()]; return { dispatcher: this.dispatcherId, readOnly: this.readOnly, identity, gates: this.gates(identity), runners: this.runners.map(({ name, role, fingerprint: print, at }) => ({ name, role, fingerprint: print, at })), charter: this.charter, open: all.filter(task => task.status !== 'closed'), closed: all.filter(task => task.status === 'closed').slice(-20) }; }
   get(id) { const task = this.tasks.get(id); if (!task) throw new Error('Unknown assignment.'); return task; }
   owns(owner) { return this.open().some(task => task.owner === owner && task.dispatcher === this.dispatcherId); }
   open() { return [...this.tasks.values()].filter(task => task.status !== 'closed'); }
@@ -178,6 +191,43 @@ export class Assignments {
     const task = { id, title: title.trim(), intent: intent.trim(), taskText: taskText.trim().slice(0, 6000), repo, branch: branch || null, baseSha: baseSha || null, owner: owner.trim(), workerKind: workerKind || 'person', suites: checked, link: link || null, proof, dispatcher: this.dispatcherId, status: 'assigned', receipts: [], verdicts: [], handoff: null, created: new Date().toISOString() };
     this.tasks.set(id, task); await this.save(); return task;
   }
+  // The owner registers a runner's public key and role. The coordinator has no tool for this.
+  async registerRunner({ name, role, publicKeyPem }) {
+    this.writable();
+    if (!String(name || '').trim()) throw new Error('Name the runner.');
+    if (!['author', 'reviewer'].includes(role)) throw new Error('A runner is an author or a reviewer.');
+    let print; try { print = fingerprint(String(publicKeyPem)); } catch { throw new Error('That is not a public key.'); }
+    if (this.runners.some(runner => runner.fingerprint === print)) throw conflict('That key is already registered.');
+    this.runners.push({ name: name.trim(), role, publicKeyPem: String(publicKeyPem), fingerprint: print, at: new Date().toISOString() });
+    await saveJson(this.runnersFile, { runners: this.runners }); this.onChange?.(); return { name: name.trim(), role, fingerprint: print };
+  }
+  // A signed local test receipt for one of the task's suites. Rejected unless it re-verifies from scratch.
+  async localReceipt(id, receipt) {
+    const task = this.get(id); this.held(task);
+    const suite = (task.suites || []).find(item => item.name === receipt?.payload?.suite);
+    if (!suite) throw new Error(`The receipt is for suite "${receipt?.payload?.suite}", which is not one of this task's suites (${(task.suites || []).map(item => item.name).join(', ')}).`);
+    const result = verifyReceipt(receipt, { runners: this.runners, expect: { repo: task.repo, suite: suite.name } });
+    if (!result.ok) throw new Error(`Test receipt rejected: ${result.reasons.join(' ')}`);
+    const { mkdir } = await import('node:fs/promises'); await mkdir(this.receiptsDir, { recursive: true });
+    const file = `${task.id}-${suite.name.replace(/[^A-Za-z0-9_.-]/g, '_')}-${receipt.payload.sha.slice(0, 8)}-${result.runner.fingerprint.slice(0, 8)}.json`;
+    await saveJson(path.join(this.receiptsDir, file), receipt);
+    task.localReceipts = (task.localReceipts || []).filter(item => item.file !== file);
+    task.localReceipts.push({ file, suite: suite.name, sha: receipt.payload.sha.toLowerCase(), runner: result.runner.name, role: result.runner.role, fingerprint: result.runner.fingerprint, counts: result.counts, command: receipt.payload.command, at: new Date().toISOString() });
+    await this.save(); return task.localReceipts[task.localReceipts.length - 1];
+  }
+  // A suite is evidenced locally when an author runner and a different reviewer runner, both registered, each signed a passing run of
+  // this commit with at least the floor of passed tests. The stored receipts are re-verified now, so a key removed or a file edited fails.
+  async localStatus(task, suite, sha) {
+    const good = [];
+    for (const item of (task.localReceipts || []).filter(entry => entry.suite === suite.name && entry.sha === String(sha).toLowerCase())) {
+      const receipt = await readJson(path.join(this.receiptsDir, item.file), null);
+      const result = receipt && verifyReceipt(receipt, { runners: this.runners, expect: { repo: task.repo, suite: suite.name } });
+      if (result?.ok && result.counts.pass >= suite.min && String(receipt.payload.sha).toLowerCase() === String(sha).toLowerCase()) good.push(result.runner);
+    }
+    const author = good.find(runner => runner.role === 'author'), reviewer = good.find(runner => runner.role === 'reviewer' && runner.fingerprint !== author?.fingerprint && runner.name.toLowerCase() !== String(task.owner).toLowerCase());
+    if (author && reviewer) return { ok: true, detail: `signed passing runs by ${author.name} and ${reviewer.name}` };
+    return { ok: false, detail: good.length ? `only ${[...new Set(good.map(runner => `${runner.name} (${runner.role})`))].join(', ')} signed a passing run; an author and a different reviewer are both needed` : 'no verified signed local run of this commit' };
+  }
   held(task) { this.writable(); if (task.status === 'closed') throw new Error('This assignment is closed.'); if (task.dispatcher !== this.dispatcherId) throw conflict(`Another dispatcher (${task.dispatcher}) holds this task.`); }
 
   // The coordinator sent something to the owning chat. The first send starts the clock; the saved task text is never replaced by a later message.
@@ -221,8 +271,19 @@ export class Assignments {
     const task = this.get(id); this.held(task);
     const receipt = task.receipts[task.receipts.length - 1];
     if (!receipt) throw new Error('Cannot close: no receipt yet.');
-    if (!receipt.verified) throw new Error(`Cannot close: the receipt is not verified against GitHub (${receipt.verifyError || 'no GitHub result'}). A model's report is not evidence.`);
-    if (receipt.checks.some(check => check.result !== 'PASS')) throw new Error('Cannot close: a check is FAIL or NOT RUN on GitHub. NOT RUN is not a pass.');
+    const checks = receipt.verified ? receipt.checks : [];
+    const names = new Set((task.suites || []).map(suite => suite.name));
+    const notPassed = 'Cannot close: a check is FAIL or NOT RUN on GitHub. NOT RUN is not a pass.';
+    const failed = checks.find(check => check.result === 'FAIL');
+    if (failed) throw new Error(`${notPassed} (${failed.name} failed.)`);
+    // Each suite needs evidence its tests ran: GitHub's passed-test count, or signed local runs by an author and a different reviewer.
+    const local = await Promise.all((task.suites || []).map(async suite => ({ suite, check: checks.find(check => check.name === suite.name), local: await this.localStatus(task, suite, receipt.sha) })));
+    const missing = local.filter(item => item.check?.result !== 'PASS' && !item.local.ok);
+    if (missing.length) {
+      if (!receipt.verified && !(task.localReceipts || []).some(entry => entry.sha === receipt.sha)) throw new Error(`Cannot close: the receipt is not verified against GitHub (${receipt.verifyError || 'no GitHub result'}) and no suite has signed local runs. A model's report is not evidence.`);
+      throw new Error(`${notPassed} No evidence the tests ran for ${missing.map(item => `${item.suite.name} (GitHub: ${item.check?.evidence || item.check?.result || 'no check run'}; local: ${item.local.detail})`).join('; ')}.`);
+    }
+    if (checks.some(check => !names.has(check.name) && check.result !== 'PASS')) throw new Error(notPassed);
     if (!receipt.negativeSeenFailing) throw new Error('Cannot close: no negative case was seen failing.');
     const verdict = task.verdicts.filter(item => item.sha === receipt.sha).slice(-1)[0];
     if (!verdict) throw new Error('Cannot close: no independent verdict on the receipt commit.');

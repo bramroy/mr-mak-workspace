@@ -24,7 +24,7 @@ test('through the real coordinator tools: assign, receipt, refused close, indepe
     const spec = { id: 'quoins', title: 'Quoins meet the soffit', intent: 'the soffit is the reference', taskText: 'Make quoins meet the soffit.', owner: 'chat-implementer', repo: 'bramroy/ZoddWorldTools', suites: ['quoin_eave'] };
     // Negative: through the model's tools, a task cannot be labelled proof, and real work is shut until the owner-started proof closes.
     await assert.rejects(run('assign_task', { ...spec, proof: true }), /never by the coordinator/);
-    await assert.rejects(run('assign_task', spec), /cutover gates/);
+    await assert.rejects(run('assign_task', spec), /live chat/, 'an owner that is not a real chat has no worker kind');
     const started = await service.assignments.startProof({ id: 'quoins', owner: 'chat-implementer', repo: spec.repo, suites: spec.suites });
     assert.equal(started.proof, true);
     await run('record_receipt', { id: 'quoins', sha: 'deadbee1', checks: [{ name: 'quoin_eave', result: 'NOT RUN' }], negativeSeenFailing: true });
@@ -108,7 +108,9 @@ test('the owner starts a proof over HTTP; the worker kind comes from the real ch
     assert.equal(made.status, 201);
     const task = await made.json();
     assert.equal(task.proof, true); assert.equal(task.workerKind, 'claude', 'read from the chat, not claimed'); assert.equal(task.owner, session.id);
-    const other = await (await post({ owner: 'codex', repo: 'bramroy/ZoddWorldTools', suites: ['tests'] })).json();
-    assert.equal(other.workerKind, 'codex');
+    // Negative: a name is not a worker. A model that calls an owner "codex" or "claude" gets nothing; only a real chat or Bob tab has a kind.
+    for (const owner of ['codex', 'claude', 'bob', 'nobody']) assert.equal((await post({ owner, repo: 'bramroy/ZoddWorldTools', suites: ['tests'] })).status, 409, owner);
+    await assert.rejects(service.coordinator.execute('assign_task', { title: 't', intent: 'i', taskText: 'x', owner: 'claude', repo: 'bramroy/ZoddWorldTools', suites: ['tests'] }, 'op-x', 'test'), /live chat|cutover/);
+    assert.equal((await (await fetch(service.origin + '/api/coordinator/assignments', { headers: { Authorization: `Bearer ${service.token}` } })).json()).open.length, 1, 'only the real chat\'s proof exists');
   } finally { delete process.env.MRMAK_NO_WATCHDOG; process.env.PATH = previousPath; await service.close(); }
 });

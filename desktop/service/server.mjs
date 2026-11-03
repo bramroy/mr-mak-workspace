@@ -154,7 +154,12 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const assignments = await new Assignments({ stateDir, verify: verifyChecks || (({ repo, sha }) => githubChecks({ repo, sha, token: githubToken() })) }).init();
   assignments.onChange = () => broadcast('assignments', {});
   // The worker's kind comes from the chat itself, never from what the model says it is.
-  const workerKindOf = owner => { const session = (() => { try { return sessions.get(String(owner)); } catch { return null; } })(); if (session) return session.agent; if (browserTabs.state().tabs?.some?.(tab => tab.id === owner)) return 'bob'; const named = String(owner || '').trim().toLowerCase(); return WORKER_KINDS.includes(named) ? named : 'person'; };
+  const workerKindOf = owner => {
+    let session = null; try { session = sessions.get(String(owner)); } catch { /* Not a chat. */ }
+    const kind = session ? session.agent : browserTabs.state().tabs?.some?.(tab => tab.id === owner) ? 'bob' : null;
+    if (!kind || !WORKER_KINDS.includes(kind)) throw Object.assign(new Error('The owner must be a live chat (Claude, Codex or OpenCode) or a Bob tab. The worker kind is read from the chat itself, never from a name.'), { status: 409 });
+    return kind;
+  };
   // Talk to Mr. Mak runs on the coordinator the owner chose in Settings.
   const coordinatorOptions = {
     repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: async () => `${await library.orientation()}\n\n${assignments.orientation(coordinator?.identity())}`, settings: () => settings,
@@ -203,8 +208,9 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'list_mcp': return mcp.list();
         case 'ask_bob': return bobQuestions.create(args);
         case 'list_assignments': return { dispatcher: assignments.dispatcherId, open: assignments.open() };
-        case 'assign_task': return assignments.assign(args, { identity: coordinator.identity(), workerKind: workerKindOf(args.owner) });
+        case 'assign_task': if (args.proof) throw new Error('A proof task is started by the owner from the Coordinator panel, never by the coordinator.'); return assignments.assign(args, { identity: coordinator.identity(), workerKind: workerKindOf(args.owner) });
         case 'record_receipt': return assignments.receipt(args.id, args);
+        case 'record_test_receipt': return assignments.localReceipt(args.id, args.receipt);
         case 'record_verdict': return assignments.verdict(args.id, args);
         case 'close_task': return assignments.close(args.id);
         case 'handoff_task': return assignments.handoff(args.id, args.to);
@@ -353,6 +359,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'GET' && url.pathname === '/api/native/settings') return json(response, 200, nativeSettings.value);
         if (method === 'GET' && url.pathname === '/api/coordinator/assignments') return json(response, 200, assignments.snapshot(coordinator.identity()));
         if (method === 'POST' && url.pathname === '/api/coordinator/proof') return json(response, 201, await assignments.startProof({ owner: data.owner, repo: data.repo, suites: data.suites }, { workerKind: workerKindOf(data.owner) }));
+        if (method === 'POST' && url.pathname === '/api/coordinator/runners') return json(response, 201, await assignments.registerRunner({ name: data.name, role: data.role, publicKeyPem: data.publicKeyPem }));
         if (method === 'POST' && url.pathname === '/api/coordinator/cutover') return json(response, 200, await assignments.approveCutover('owner', coordinator.identity()));
         if (method === 'GET' && url.pathname === '/api/mcp') { const value = await mcp.list(); return json(response, 200, { ...value, engines: await engineStatus(value.servers) }); }
         if (method === 'POST' && url.pathname === '/api/skills/discover') return json(response, 200, await discoverSkills(await projectFolder(data.path)));
