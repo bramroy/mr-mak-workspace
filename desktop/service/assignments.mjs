@@ -100,7 +100,7 @@ export class Assignments {
   // verify: async ({ repo, sha }) => [{ name, result }] from GitHub. Without it, receipts stay unverified and cannot close a task.
   constructor({ stateDir, dispatcherId = null, verify = null, pid = process.pid, openGates = false }) {
     Object.assign(this, { stateDir, verify, pid, openGates }); // openGates exists for tests of other rules; the service never sets it.
-    this.file = path.join(stateDir, 'assignments.json'); this.charterFile = path.join(stateDir, 'coordinator-charter.json'); this.lockFile = path.join(stateDir, 'dispatcher.lock'); this.cutoverFile = path.join(stateDir, 'cutover.json'); this.runnersFile = path.join(stateDir, 'runners.json'); this.receiptsDir = path.join(stateDir, 'test-receipts'); this.runners = [];
+    this.file = path.join(stateDir, 'assignments.json'); this.charterFile = path.join(stateDir, 'coordinator-charter.json'); this.lockFile = path.join(stateDir, 'dispatcher.lock'); this.cutoverFile = path.join(stateDir, 'cutover.json'); this.runnersFile = path.join(stateDir, 'runners.json'); this.suitesFile = path.join(stateDir, 'suites.json'); this.pinned = {}; this.receiptsDir = path.join(stateDir, 'test-receipts'); this.runners = [];
     this.tasks = new Map(); this.dispatcherId = dispatcherId; this.charter = DEFAULT_CHARTER; this.readOnly = null; this.cutover = { approved: null };
   }
   // One process may act as this state directory's dispatcher. A second one reads, and refuses to change anything.
@@ -131,12 +131,13 @@ export class Assignments {
     if (typeof charter?.text === 'string' && charter.text.trim()) this.charter = charter.text;
     this.cutover = { approved: null, ...(await readJson(this.cutoverFile, {})) };
     this.runners = (await readJson(this.runnersFile, { runners: [] })).runners || [];
+    this.pinned = (await readJson(this.suitesFile, { suites: {} })).suites || {};
     await this.acquire();
     if (!this.readOnly) await saveJson(this.charterFile, { dispatcherId: this.dispatcherId, text: this.charter });
     return this;
   }
   async save() { this.writable(); await saveJson(this.file, { tasks: [...this.tasks.values()] }); this.onChange?.(); }
-  snapshot(identity = null) { const all = [...this.tasks.values()]; return { dispatcher: this.dispatcherId, readOnly: this.readOnly, identity, gates: this.gates(identity), runners: this.runners.map(({ name, role, fingerprint: print, at }) => ({ name, role, fingerprint: print, at })), charter: this.charter, open: all.filter(task => task.status !== 'closed'), closed: all.filter(task => task.status === 'closed').slice(-20) }; }
+  snapshot(identity = null) { const all = [...this.tasks.values()]; return { dispatcher: this.dispatcherId, readOnly: this.readOnly, identity, gates: this.gates(identity), runners: this.runners.map(({ name, role, person, fingerprint: print, at }) => ({ name, role, person, fingerprint: print, at })), pinnedSuites: Object.entries(this.pinned).map(([key, value]) => ({ key, ...value })), charter: this.charter, open: all.filter(task => task.status !== 'closed'), closed: all.filter(task => task.status === 'closed').slice(-20) }; }
   get(id) { const task = this.tasks.get(id); if (!task) throw new Error('Unknown assignment.'); return task; }
   owns(owner) { return this.open().some(task => task.owner === owner && task.dispatcher === this.dispatcherId); }
   open() { return [...this.tasks.values()].filter(task => task.status !== 'closed'); }
@@ -192,21 +193,33 @@ export class Assignments {
     this.tasks.set(id, task); await this.save(); return task;
   }
   // The owner registers a runner's public key and role. The coordinator has no tool for this.
-  async registerRunner({ name, role, publicKeyPem }) {
+  async registerRunner({ name, role, person, publicKeyPem }) {
     this.writable();
+    if (!String(person || '').trim()) throw new Error('Name the person this runner key belongs to. The author and the reviewer must be different people.');
     if (!String(name || '').trim()) throw new Error('Name the runner.');
     if (!['author', 'reviewer'].includes(role)) throw new Error('A runner is an author or a reviewer.');
     let print; try { print = fingerprint(String(publicKeyPem)); } catch { throw new Error('That is not a public key.'); }
     if (this.runners.some(runner => runner.fingerprint === print)) throw conflict('That key is already registered.');
-    this.runners.push({ name: name.trim(), role, publicKeyPem: String(publicKeyPem), fingerprint: print, at: new Date().toISOString() });
-    await saveJson(this.runnersFile, { runners: this.runners }); this.onChange?.(); return { name: name.trim(), role, fingerprint: print };
+    this.runners.push({ name: name.trim(), role, person: person.trim(), publicKeyPem: String(publicKeyPem), fingerprint: print, at: new Date().toISOString() });
+    await saveJson(this.runnersFile, { runners: this.runners }); this.onChange?.(); return { name: name.trim(), role, person: person.trim(), fingerprint: print };
   }
+  // The owner pins the exact command that proves a suite for a repository. A receipt for any other command is refused: `echo "# pass 99"` is not a test run.
+  async pinSuite({ repo, suite, command }) {
+    this.writable();
+    if (!REPO.test(String(repo || ''))) throw new Error('Name the repository as owner/name.');
+    if (!String(suite || '').trim() || !String(command || '').trim()) throw new Error('Give the suite name and the exact test command.');
+    this.pinned[`${repo}|${suite.trim()}`] = { repo, suite: suite.trim(), command: command.trim(), at: new Date().toISOString() };
+    await saveJson(this.suitesFile, { suites: this.pinned }); this.onChange?.(); return this.pinned[`${repo}|${suite.trim()}`];
+  }
+  pinnedCommand(repo, suite) { return this.pinned[`${repo}|${suite}`]?.command || null; }
   // A signed local test receipt for one of the task's suites. Rejected unless it re-verifies from scratch.
   async localReceipt(id, receipt) {
     const task = this.get(id); this.held(task);
     const suite = (task.suites || []).find(item => item.name === receipt?.payload?.suite);
     if (!suite) throw new Error(`The receipt is for suite "${receipt?.payload?.suite}", which is not one of this task's suites (${(task.suites || []).map(item => item.name).join(', ')}).`);
-    const result = verifyReceipt(receipt, { runners: this.runners, expect: { repo: task.repo, suite: suite.name } });
+    const command = this.pinnedCommand(task.repo, suite.name);
+    if (!command) throw new Error(`The owner has not pinned the test command for "${suite.name}" in ${task.repo}, so a local receipt cannot count. Pin it in the Coordinator panel.`);
+    const result = verifyReceipt(receipt, { runners: this.runners, expect: { repo: task.repo, suite: suite.name, command } });
     if (!result.ok) throw new Error(`Test receipt rejected: ${result.reasons.join(' ')}`);
     const { mkdir } = await import('node:fs/promises'); await mkdir(this.receiptsDir, { recursive: true });
     const file = `${task.id}-${suite.name.replace(/[^A-Za-z0-9_.-]/g, '_')}-${receipt.payload.sha.slice(0, 8)}-${result.runner.fingerprint.slice(0, 8)}.json`;
@@ -221,12 +234,13 @@ export class Assignments {
     const good = [];
     for (const item of (task.localReceipts || []).filter(entry => entry.suite === suite.name && entry.sha === String(sha).toLowerCase())) {
       const receipt = await readJson(path.join(this.receiptsDir, item.file), null);
-      const result = receipt && verifyReceipt(receipt, { runners: this.runners, expect: { repo: task.repo, suite: suite.name } });
+      const command = this.pinnedCommand(task.repo, suite.name);
+      const result = receipt && command && verifyReceipt(receipt, { runners: this.runners, expect: { repo: task.repo, suite: suite.name, command } });
       if (result?.ok && result.counts.pass >= suite.min && String(receipt.payload.sha).toLowerCase() === String(sha).toLowerCase()) good.push(result.runner);
     }
-    const author = good.find(runner => runner.role === 'author'), reviewer = good.find(runner => runner.role === 'reviewer' && runner.fingerprint !== author?.fingerprint && runner.name.toLowerCase() !== String(task.owner).toLowerCase());
-    if (author && reviewer) return { ok: true, detail: `signed passing runs by ${author.name} and ${reviewer.name}` };
-    return { ok: false, detail: good.length ? `only ${[...new Set(good.map(runner => `${runner.name} (${runner.role})`))].join(', ')} signed a passing run; an author and a different reviewer are both needed` : 'no verified signed local run of this commit' };
+    const author = good.find(runner => runner.role === 'author'), reviewer = good.find(runner => runner.role === 'reviewer' && author && runner.fingerprint !== author.fingerprint && runner.person.toLowerCase() !== author.person.toLowerCase());
+    if (author && reviewer) return { ok: true, detail: `signed passing runs by ${author.name} (${author.person}) and ${reviewer.name} (${reviewer.person})` };
+    return { ok: false, detail: good.length ? `only ${[...new Set(good.map(runner => `${runner.name} (${runner.role})`))].join(', ')} signed a passing run; an author and a reviewer who is a different person are both needed` : 'no verified signed local run of this commit' };
   }
   held(task) { this.writable(); if (task.status === 'closed') throw new Error('This assignment is closed.'); if (task.dispatcher !== this.dispatcherId) throw conflict(`Another dispatcher (${task.dispatcher}) holds this task.`); }
 

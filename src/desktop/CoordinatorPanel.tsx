@@ -12,7 +12,7 @@ type Assignment = {
   proof?: boolean; localReceipts?: { suite: string; sha: string; runner: string; role: string; counts: { pass: number | null } }[]; workerKind?: string; suites?: { name: string; min: number }[]; stalled?: { reason: string } | null; receipts: Receipt[]; verdicts: Verdict[]; handoff: { to: string; from: string; accepted?: string } | null
 }
 type Gate = { name: string; ok: boolean; detail: string }
-type Snapshot = { dispatcher: string; readOnly: string | null; identity: CoordinatorIdentity | null; gates: Gate[]; runners?: { name: string; role: string; fingerprint: string }[]; charter: string; open: Assignment[]; closed: Assignment[] }
+type Snapshot = { dispatcher: string; readOnly: string | null; identity: CoordinatorIdentity | null; gates: Gate[]; runners?: { name: string; role: string; person?: string; fingerprint: string }[]; pinnedSuites?: { key: string; repo: string; suite: string; command: string }[]; charter: string; open: Assignment[]; closed: Assignment[] }
 const statusLabel: Record<string, string> = { assigned: 'Assigned', receipted: 'Receipt in', verified: 'Verdict in', closed: 'Closed' }
 const short = (sha: string) => sha.slice(0, 8)
 const tone = (result: string) => result === 'PASS' ? 'pass' : result === 'FAIL' ? 'fail' : 'notrun'
@@ -35,8 +35,10 @@ export default function CoordinatorPanel({ onClose }: { onClose: () => void }) {
   const approve = async () => { setApproving(true); try { await api('/coordinator/cutover', {}); await refresh() } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) } finally { setApproving(false) } }
   const [proofForm, setProofForm] = useState({ owner: '', repo: '', suites: '' })
   const startProof = async () => { try { await api('/coordinator/proof', { owner: proofForm.owner.trim(), repo: proofForm.repo.trim(), suites: proofForm.suites.split(',').map(item => item.trim()).filter(Boolean) }); setProofForm({ owner: '', repo: '', suites: '' }); await refresh() } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) } }
-  const [runnerForm, setRunnerForm] = useState({ name: '', role: 'author', publicKeyPem: '' })
-  const addRunner = async () => { try { await api('/coordinator/runners', runnerForm); setRunnerForm({ name: '', role: 'author', publicKeyPem: '' }); await refresh() } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) } }
+  const [runnerForm, setRunnerForm] = useState({ name: '', person: '', role: 'author', publicKeyPem: '' })
+  const addRunner = async () => { try { await api('/coordinator/runners', runnerForm); setRunnerForm({ name: '', person: '', role: 'author', publicKeyPem: '' }); await refresh() } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) } }
+  const [pinForm, setPinForm] = useState({ repo: '', suite: '', command: '' })
+  const pinSuite = async () => { try { await api('/coordinator/suites', pinForm); setPinForm({ repo: '', suite: '', command: '' }); await refresh() } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) } }
   const others = snapshot?.gates.filter(gate => gate.name !== 'owner') || []
   return <div className="files-panel coordinator-panel"><header><h2>Coordinator</h2><div>
     <button className="desk-icon" onClick={() => void refresh()} title="Refresh" aria-label="Refresh coordinator"><Icon name="refresh" size={15} /></button>
@@ -60,11 +62,18 @@ export default function CoordinatorPanel({ onClose }: { onClose: () => void }) {
         <p className="coord-meta">Until the gates pass, only a proof task you start can run.</p></section>}
       {snapshot && !snapshot.readOnly && <details className="coord-proof-form" data-testid="coordinator-runners"><summary>Test runners ({snapshot.runners?.length || 0})</summary>
         <p className="coord-meta">Tests run without paid CI are proved by signed runs: an author runner and a different reviewer runner sign the same commit. Only you register a runner (node scripts/test-receipt.mjs keygen, then paste its public key).</p>
-        <ul>{(snapshot.runners || []).map(runner => <li key={runner.fingerprint}>{runner.name} · {runner.role} · <code>{runner.fingerprint.slice(0, 12)}</code></li>)}</ul>
+        <ul>{(snapshot.runners || []).map(runner => <li key={runner.fingerprint}>{runner.name} · {runner.person} · {runner.role} · <code>{runner.fingerprint.slice(0, 12)}</code></li>)}</ul>
         <input aria-label="Runner name" placeholder="Runner name" value={runnerForm.name} onChange={event => setRunnerForm({ ...runnerForm, name: event.target.value })} />
+        <input aria-label="Runner person" placeholder="Person (author and reviewer must differ)" value={runnerForm.person} onChange={event => setRunnerForm({ ...runnerForm, person: event.target.value })} />
         <select aria-label="Runner role" value={runnerForm.role} onChange={event => setRunnerForm({ ...runnerForm, role: event.target.value })}><option value="author">Author</option><option value="reviewer">Reviewer</option></select>
         <textarea aria-label="Runner public key" placeholder="-----BEGIN PUBLIC KEY-----" value={runnerForm.publicKeyPem} onChange={event => setRunnerForm({ ...runnerForm, publicKeyPem: event.target.value })} />
-        <button className="desk-secondary" disabled={!runnerForm.name.trim() || !runnerForm.publicKeyPem.trim()} onClick={() => void addRunner()}>Register runner</button></details>}
+        <p className="coord-meta">Pinned test commands (a receipt for any other command is refused):</p>
+        <ul>{(snapshot.pinnedSuites || []).map(item => <li key={item.key}>{item.repo} · {item.suite} · <code>{item.command}</code></li>)}</ul>
+        <input aria-label="Pin repository" placeholder="owner/name" value={pinForm.repo} onChange={event => setPinForm({ ...pinForm, repo: event.target.value })} />
+        <input aria-label="Pin suite name" placeholder="Suite (check) name" value={pinForm.suite} onChange={event => setPinForm({ ...pinForm, suite: event.target.value })} />
+        <input aria-label="Pin test command" placeholder="Exact test command" value={pinForm.command} onChange={event => setPinForm({ ...pinForm, command: event.target.value })} />
+        <button className="desk-secondary" disabled={!pinForm.repo.trim() || !pinForm.suite.trim() || !pinForm.command.trim()} onClick={() => void pinSuite()}>Pin command</button>
+        <button className="desk-secondary" disabled={!runnerForm.name.trim() || !runnerForm.person.trim() || !runnerForm.publicKeyPem.trim()} onClick={() => void addRunner()}>Register runner</button></details>}
       {error && <p className="desk-error-inline" role="alert">{error}</p>}
       {snapshot && !snapshot.open.length && <p className="coord-empty">No open assignments.</p>}
       {snapshot?.open.map(task => {

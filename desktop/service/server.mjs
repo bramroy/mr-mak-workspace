@@ -359,7 +359,8 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'GET' && url.pathname === '/api/native/settings') return json(response, 200, nativeSettings.value);
         if (method === 'GET' && url.pathname === '/api/coordinator/assignments') return json(response, 200, assignments.snapshot(coordinator.identity()));
         if (method === 'POST' && url.pathname === '/api/coordinator/proof') return json(response, 201, await assignments.startProof({ owner: data.owner, repo: data.repo, suites: data.suites }, { workerKind: workerKindOf(data.owner) }));
-        if (method === 'POST' && url.pathname === '/api/coordinator/runners') return json(response, 201, await assignments.registerRunner({ name: data.name, role: data.role, publicKeyPem: data.publicKeyPem }));
+        if (method === 'POST' && url.pathname === '/api/coordinator/runners') return json(response, 201, await assignments.registerRunner({ name: data.name, role: data.role, person: data.person, publicKeyPem: data.publicKeyPem }));
+        if (method === 'POST' && url.pathname === '/api/coordinator/suites') return json(response, 201, await assignments.pinSuite({ repo: data.repo, suite: data.suite, command: data.command }));
         if (method === 'POST' && url.pathname === '/api/coordinator/cutover') return json(response, 200, await assignments.approveCutover('owner', coordinator.identity()));
         if (method === 'GET' && url.pathname === '/api/mcp') { const value = await mcp.list(); return json(response, 200, { ...value, engines: await engineStatus(value.servers) }); }
         if (method === 'POST' && url.pathname === '/api/skills/discover') return json(response, 200, await discoverSkills(await projectFolder(data.path)));

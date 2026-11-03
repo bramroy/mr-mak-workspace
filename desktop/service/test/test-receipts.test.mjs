@@ -24,7 +24,7 @@ const REPO = 'bramroy/mr-mak-workspace';
 const SUITE = 'service tests';
 const author = generateRunnerKey(), reviewer = generateRunnerKey(), stranger = generateRunnerKey();
 const run = (cwd, key, runner, extra = {}) => runReceipt({ cwd, repo: REPO, suite: SUITE, command: COMMAND, privateKeyPem: key.privateKeyPem, runner, ...extra });
-const registered = [{ name: 'Author Box', role: 'author', publicKeyPem: author.publicKeyPem }, { name: 'Reviewer Box', role: 'reviewer', publicKeyPem: reviewer.publicKeyPem }];
+const registered = [{ name: 'Author Box', role: 'author', person: 'Alex', publicKeyPem: author.publicKeyPem }, { name: 'Reviewer Box', role: 'reviewer', person: 'Robin', publicKeyPem: reviewer.publicKeyPem }];
 
 test('parseCounts reads node:test summaries in TAP and spec form; a missing summary is null', () => {
   assert.deepEqual(parseCounts('# tests 12\n# pass 10\n# fail 1\n# skipped 1\n'), { tests: 12, pass: 10, fail: 1, skipped: 1 });
@@ -63,8 +63,9 @@ test('negatives: tampered counts, tampered output, an unregistered key, a dirty 
 
 async function ledger(extra = {}) {
   const a = await new Assignments({ stateDir: await tmp('mrmak-ledger-'), openGates: true, verify: null, ...extra }).init();
-  await a.registerRunner({ name: 'Author Box', role: 'author', publicKeyPem: author.publicKeyPem });
-  await a.registerRunner({ name: 'Reviewer Box', role: 'reviewer', publicKeyPem: reviewer.publicKeyPem });
+  await a.registerRunner({ name: 'Author Box', role: 'author', person: 'Alex', publicKeyPem: author.publicKeyPem });
+  await a.registerRunner({ name: 'Reviewer Box', role: 'reviewer', person: 'Robin', publicKeyPem: reviewer.publicKeyPem });
+  await a.pinSuite({ repo: REPO, suite: SUITE, command: COMMAND });
   return a;
 }
 const spec = { id: 't1', title: 'Local evidence', intent: 'the tests must really run', taskText: 'Do the thing.', owner: 'Author Box', repo: REPO, suites: [{ name: SUITE, min: 3 }] };
@@ -78,7 +79,7 @@ test('end to end with no GitHub checks: an author and a different reviewer sign 
   await assert.rejects(a.close('t1'), /not verified against GitHub.*no suite has signed local runs/, 'a model report alone is not evidence');
   const authored = await run(cwd, author, 'Author Box');
   await a.localReceipt('t1', authored);
-  await assert.rejects(a.close('t1'), /only Author Box \(author\) signed a passing run; an author and a different reviewer are both needed/);
+  await assert.rejects(a.close('t1'), /only Author Box \(author\) signed a passing run; an author and a reviewer who is a different person are both needed/);
   await a.localReceipt('t1', await run(cwd, reviewer, 'Reviewer Box'));
   assert.equal((await a.close('t1')).status, 'closed');
   assert.equal(a.get('t1').localReceipts.length, 2);
@@ -103,21 +104,45 @@ test('negatives on the ledger: unregistered, edited, wrong-commit, below-floor a
   await b.localReceipt('t1', await run(small.cwd, author, 'Author Box')); await b.localReceipt('t1', await run(small.cwd, reviewer, 'Reviewer Box'));
   await b.receipt('t1', { sha: small.sha, checks: [{ name: SUITE, result: 'PASS' }], negativeSeenFailing: true }); await b.verdict('t1', { verifier: 'chat-reviewer', sha: small.sha, result: 'PASS' });
   await assert.rejects(b.close('t1'), /no verified signed local run/, 'only 2 tests passed; 3 are required');
-  // The reviewer cannot be the owner.
-  const c = await ledger(); await c.assign({ ...spec, owner: 'Reviewer Box' }, { workerKind: 'claude' });
-  await c.localReceipt('t1', await run(cwd, author, 'Author Box')); await c.localReceipt('t1', await run(cwd, reviewer, 'Reviewer Box'));
-  await c.receipt('t1', { sha: newer, checks: [{ name: SUITE, result: 'PASS' }], negativeSeenFailing: true }); await c.verdict('t1', { verifier: 'chat-reviewer', sha: newer, result: 'PASS' });
-  await assert.rejects(c.close('t1'), /only Author Box \(author\)/, 'the owner cannot also be the reviewer runner');
+  // Two keys of one person are not two parties: the author and the reviewer must be different people.
+  const same = await new Assignments({ stateDir: await tmp('mrmak-ledger-'), openGates: true }).init();
+  await same.registerRunner({ name: 'Author Box', role: 'author', person: 'Alex', publicKeyPem: author.publicKeyPem });
+  await same.registerRunner({ name: 'Reviewer Box', role: 'reviewer', person: 'alex', publicKeyPem: reviewer.publicKeyPem }); // Same person, another key and machine.
+  await same.pinSuite({ repo: REPO, suite: SUITE, command: COMMAND }); await same.assign(spec, { workerKind: 'claude' });
+  await same.localReceipt('t1', await run(cwd, author, 'Author Box')); await same.localReceipt('t1', await run(cwd, reviewer, 'Reviewer Box'));
+  await same.receipt('t1', { sha: newer, checks: [{ name: SUITE, result: 'PASS' }], negativeSeenFailing: true }); await same.verdict('t1', { verifier: 'chat-reviewer', sha: newer, result: 'PASS' });
+  await assert.rejects(same.close('t1'), /reviewer who is a different person/, 'one person with two keys is one party');
   // Revoking: remove the reviewer key from the registry; the stored receipt no longer verifies.
   const d = await ledger(); await d.assign(spec, { workerKind: 'claude' });
   await d.localReceipt('t1', await run(cwd, author, 'Author Box')); await d.localReceipt('t1', await run(cwd, reviewer, 'Reviewer Box'));
   await d.receipt('t1', { sha: newer, checks: [{ name: SUITE, result: 'PASS' }], negativeSeenFailing: true }); await d.verdict('t1', { verifier: 'chat-reviewer', sha: newer, result: 'PASS' });
   d.runners = d.runners.filter(runner => runner.role !== 'reviewer');
   await assert.rejects(d.close('t1'), /only Author Box \(author\)/);
-  await assert.rejects(d.registerRunner({ name: 'x', role: 'boss', publicKeyPem: author.publicKeyPem }), /author or a reviewer/);
-  await assert.rejects(d.registerRunner({ name: 'x', role: 'author', publicKeyPem: 'garbage' }), /not a public key/);
-  await assert.rejects(a.registerRunner({ name: 'dup', role: 'author', publicKeyPem: author.publicKeyPem }), /already registered/);
+  await assert.rejects(d.registerRunner({ name: 'x', role: 'boss', person: 'p', publicKeyPem: author.publicKeyPem }), /author or a reviewer/);
+  await assert.rejects(d.registerRunner({ name: 'x', role: 'author', person: 'p', publicKeyPem: 'garbage' }), /not a public key/);
+  await assert.rejects(a.registerRunner({ name: 'dup', role: 'author', person: 'p', publicKeyPem: author.publicKeyPem }), /already registered/);
+  await assert.rejects(a.registerRunner({ name: 'x', role: 'author', person: '', publicKeyPem: stranger.publicKeyPem }), /Name the person/);
   assert.equal(sha.length, 40);
+});
+
+test('negative: a registered runner cannot sign an echo; only the owner-pinned command counts, and an unpinned suite cannot use local evidence', async () => {
+  const { cwd, sha } = await checkout(3);
+  const a = await ledger(); await a.assign(spec, { workerKind: 'claude' });
+  const fake = await run(cwd, author, 'Author Box', { command: 'echo "# pass 99"' });
+  assert.equal(fake.payload.counts.pass, 99, 'the signed output really says 99');
+  assert.deepEqual(verifyReceipt(fake, { runners: registered, expect: { repo: REPO, suite: SUITE } }).reasons, [], 'without a pinned command it would verify, which is the hole');
+  await assert.rejects(a.localReceipt('t1', fake), /not the pinned test command/);
+  await assert.rejects(a.localReceipt('t1', await run(cwd, author, 'Author Box', { command: 'node --test suite.test.mjs --test-name-pattern=nothing' })), /not the pinned test command/);
+  const bare = await new Assignments({ stateDir: await tmp('mrmak-ledger-'), openGates: true }).init();
+  await bare.registerRunner({ name: 'Author Box', role: 'author', person: 'Alex', publicKeyPem: author.publicKeyPem }); await bare.assign(spec, { workerKind: 'claude' });
+  await assert.rejects(bare.localReceipt('t1', await run(cwd, author, 'Author Box')), /has not pinned the test command/);
+  await assert.rejects(bare.pinSuite({ repo: 'nope', suite: 'x', command: 'y' }), /owner\/name/);
+  await assert.rejects(bare.pinSuite({ repo: REPO, suite: '', command: 'y' }), /suite name and the exact/);
+  // Changing the pin later invalidates receipts already stored for the old command.
+  await a.localReceipt('t1', await run(cwd, author, 'Author Box')); await a.localReceipt('t1', await run(cwd, reviewer, 'Reviewer Box'));
+  await a.receipt('t1', { sha, checks: [{ name: SUITE, result: 'PASS' }], negativeSeenFailing: true }); await a.verdict('t1', { verifier: 'chat-reviewer', sha, result: 'PASS' });
+  await a.pinSuite({ repo: REPO, suite: SUITE, command: 'node --test suite.test.mjs --test-reporter=tap' });
+  await assert.rejects(a.close('t1'), /no verified signed local run/);
 });
 
 test('a GitHub FAIL on a suite still blocks the close even when local runs pass', async () => {

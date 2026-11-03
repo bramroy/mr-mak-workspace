@@ -69,6 +69,7 @@ export function verifyReceipt(receipt, { runners = [], expect = {} } = {}) {
   if (payload.clean !== true) reasons.push('The working tree was not clean, so the run is not of the commit.');
   if (payload.pushed !== true) reasons.push('The commit was not on a remote branch, so a reviewer cannot get it.');
   if (expect.repo && payload.repo !== expect.repo) reasons.push(`The receipt is for ${payload.repo}, not ${expect.repo}.`);
+  if (expect.command && payload.command !== expect.command) reasons.push(`The command was not the pinned test command for this suite ("${String(payload.command).slice(0, 80)}").`);
   if (expect.suite && payload.suite !== expect.suite) reasons.push(`The receipt is for suite "${payload.suite}", not "${expect.suite}".`);
-  return { ok: !reasons.length, reasons, runner: runner ? { name: runner.name, role: runner.role, fingerprint: print } : null, counts };
+  return { ok: !reasons.length, reasons, runner: runner ? { name: runner.name, role: runner.role, person: runner.person || runner.name, fingerprint: print } : null, counts };
 }
