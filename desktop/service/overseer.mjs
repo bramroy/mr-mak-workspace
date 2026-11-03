@@ -20,14 +20,15 @@ export const overseerRequest = stalled => `Overseer check (automatic, the owner 
 For each one, read its screen. If it stopped on a usage limit, a network or API error, or an unfinished turn that only needs to continue, send it a short message to continue its task. If it asks the owner a question or a permission, do not answer it: focus the chat and say what it needs. If it is still making progress, leave it alone. Do not open new chats. Answer with one short line per chat saying what you did.`;
 
 export class Overseer {
-  constructor({ chats, ask, enabled }) { Object.assign(this, { chats, ask, enabled }); this.seen = new Set(); this.timer = null; this.running = false; }
+  constructor({ chats, ask, enabled, skip = () => false }) { Object.assign(this, { chats, ask, enabled, skip }); this.seen = new Set(); this.timer = null; this.running = false; }
   update() {
     if (this.enabled() && !this.timer) { this.timer = setInterval(() => void this.check().catch(() => {}), OVERSEER_CHECK_MS); this.timer.unref?.(); }
     if (!this.enabled() && this.timer) { clearInterval(this.timer); this.timer = null; }
   }
   async check(now = Date.now()) {
     if (!this.enabled() || this.running) return null;
-    const stalled = stalledChats(this.chats(), now, this.seen);
+    // A chat that owns an open assignment is the dispatch watchdog's: two nudgers on one chat would be dual dispatch.
+    const stalled = stalledChats(this.chats().filter(chat => !this.skip(chat.id)), now, this.seen);
     if (!stalled.length) return null;
     for (const chat of stalled) this.seen.add(chat.key);
     if (this.seen.size > 500) this.seen = new Set([...this.seen].slice(-250));

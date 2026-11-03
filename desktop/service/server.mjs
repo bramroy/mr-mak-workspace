@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { readFile, stat, realpath } from 'node:fs/promises';
@@ -9,6 +10,7 @@ import { BrowserTabs } from './browser-tabs.mjs';
 import { BobQuestions } from './bob-questions.mjs';
 import { Coordinator, openChatArguments } from './coordinator.mjs';
 import { Assignments } from './assignments.mjs';
+import { DispatchWatchdog } from './watchdog.mjs';
 import { ClaudeCoordinator, CLAUDE_COORDINATOR_MODELS } from './coordinator-claude.mjs';
 import { Overseer } from './overseer.mjs';
 import { Files, serveFile } from './files.mjs';
@@ -148,6 +150,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
     return { attached: verified, submitted: false };
   };
   const assignments = await new Assignments({ stateDir }).init();
+  assignments.onChange = () => broadcast('assignments', {});
   // Talk to Mr. Mak runs on the coordinator the owner chose in Settings.
   const coordinatorOptions = {
     repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: async () => `${await library.orientation()}\n\n${assignments.orientation()}`, settings: () => settings,
@@ -173,7 +176,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
           focus(session.id); return session;
         }
         case 'read_chat': return sessions.read(args.id);
-        case 'send_to_chat': return sessions.input(args.id, args.text, { coordinator: true, submit: true });
+        case 'send_to_chat': { const sent = sessions.input(args.id, args.text, { coordinator: true, submit: true }); await assignments.markDispatched(args.id, args.text); return sent; }
         case 'attach_files': return attach(args.id, args.paths, true);
         case 'focus_chat': return focus(args.id);
         case 'rename_chat': return sessions.rename(args.id, args.name);
@@ -223,7 +226,9 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
     return next;
   };
   let coordinator = await makeCoordinator(settings.coordinatorAgent);
-  const overseer = new Overseer({ chats: () => sessions.active(), ask: request => coordinator.ask(request), enabled: () => !!settings.overseer });
+  const watchdog = new DispatchWatchdog({ assignments, chats: () => sessions.active(), send: (id, text) => sessions.input(id, text, { coordinator: true, submit: true }), notify: ({ owner, title, text }) => { const notice = { id: randomUUID(), sessionId: owner, name: title, kind: 'attention', text, at: new Date().toISOString() }; notices.push(notice); if (notices.length > 100) notices.shift(); broadcast('notice', { notice }); } });
+  if (!process.env.MRMAK_NO_WATCHDOG) watchdog.start();
+  const overseer = new Overseer({ chats: () => sessions.active(), ask: request => coordinator.ask(request), enabled: () => !!settings.overseer, skip: id => assignments.owns(id) });
   overseer.update();
   const quick = await new QuickActions({ stateDir, workspace, context: () => ({ chats: sessions.active(), route: workspaceRoute }), execute: (...args) => coordinator.execute(...args), completed: operation => broadcast('coordinator-result', { operation }) }).init();
   const askMak = async data => {
@@ -342,6 +347,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'GET' && url.pathname === '/api/integrations') return json(response, 200, { providers: integrations.list(), bindings: integrations.bindings.map(({ providerId, externalId, workspaceId, boundAt }) => ({ providerId, externalId, workspaceId, boundAt })) });
         if (method === 'POST' && url.pathname === '/api/integrations/bind') return json(response, 200, await integrations.bind(data));
         if (method === 'GET' && url.pathname === '/api/native/settings') return json(response, 200, nativeSettings.value);
+        if (method === 'GET' && url.pathname === '/api/coordinator/assignments') return json(response, 200, assignments.snapshot(coordinator.identity()));
         if (method === 'GET' && url.pathname === '/api/mcp') { const value = await mcp.list(); return json(response, 200, { ...value, engines: await engineStatus(value.servers) }); }
         if (method === 'POST' && url.pathname === '/api/skills/discover') return json(response, 200, await discoverSkills(await projectFolder(data.path)));
         if (method === 'POST' && url.pathname === '/api/skills/create') return json(response, 200, await createSkill(await projectFolder(data.path), data.candidate));
@@ -640,7 +646,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
       nativeMessage: event => nativeSettings.receive(event),
       async close() {
         if (closing) return; closing = true; mcp.close(); nativeSettings.close(); await files.writes.catch(() => {});
-      watcher?.close(); clearTimeout(restoreTimer); overseer.close(); coordinator.close(); clearTimeout(settingsTimer); await saveSettings(); await transcriptSave; await quick.saves; await workspace.writes;
+      watcher?.close(); clearTimeout(restoreTimer); overseer.close(); watchdog.close(); coordinator.close(); clearTimeout(settingsTimer); await saveSettings(); await transcriptSave; await quick.saves; await workspace.writes;
       dictation.close(); await mobile.close(); await games.close();
       for (const ws of wss.clients) ws.terminate();
       wss.close(); await sessions.close();

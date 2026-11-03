@@ -7,6 +7,7 @@ import MarkdownDocument from '../components/MarkdownDocument'
 import WorkspaceSettings from './WorkspaceSettings'
 import McpPanel from './McpPanel'
 import RulesPanel from './RulesPanel'
+import CoordinatorPanel from './CoordinatorPanel'
 import { ZoomImage } from '../components/ImagePreview'
 import ReportFrame, { REPORT_SANDBOX } from '../components/ReportFrame'
 import { fileManager, isMac, trashName } from './platform'
@@ -130,7 +131,7 @@ export default function FilesRail() {
   const { repo, selectedId, sessions } = useDesktop()
   const storageKey = `mrmak.files.${pathKey(repo)}`
   const [open, setOpen] = useState(() => localStorage.getItem(`${storageKey}.open`) === 'true')
-  const [panel, setPanel] = useState<'files' | 'skills' | 'rules' | 'mcp' | 'settings'>('files')
+  const [panel, setPanel] = useState<'files' | 'skills' | 'rules' | 'mcp' | 'coordinator' | 'settings'>('files')
   const [root, setRoot] = useState(repo)
   const [typedPath, setTypedPath] = useState(repo)
   const [rootFolder, setRootFolder] = useState<Folder | null>(null)
@@ -199,7 +200,7 @@ export default function FilesRail() {
     return () => { window.removeEventListener('mrmak-native-drag-result', complete); window.removeEventListener('mrmak-recycle-result', recycled) }
   }, [refresh])
   const navigate = (path: string) => { setRoot(path); setTypedPath(path); setSelected(path); setDestination(path); if (pathKey(path) !== pathKey(root)) setRootFolder(null); setQuery(''); setError('') }
-  const showPanel = (next: 'files' | 'skills' | 'rules' | 'mcp' | 'settings') => {
+  const showPanel = (next: 'files' | 'skills' | 'rules' | 'mcp' | 'coordinator' | 'settings') => {
     if (open && panel === next) { setOpen(false); return }
     if (next === 'skills') { setMode('all'); navigate(`${repo}/.claude/skills`) }
     if (next === 'files' && panel !== 'files') { setMode('main'); navigate(repo) }
@@ -282,6 +283,7 @@ export default function FilesRail() {
   return <aside className={`files-container ${open ? 'expanded' : ''}`}>
     {open && panel === 'settings' && <WorkspaceSettings onClose={() => setOpen(false)} />}
     {open && panel === 'mcp' && <McpPanel onClose={() => setOpen(false)} />}
+    {open && panel === 'coordinator' && <CoordinatorPanel onClose={() => setOpen(false)} />}
     {open && panel === 'rules' && <RulesPanel onClose={() => setOpen(false)} />}
     {open && (panel === 'files' || panel === 'skills') && <div className="files-panel"><header><h2>{panel === 'skills' ? 'Skills' : 'Files'}</h2><div>
       <button className="desk-icon" disabled={copying} onClick={() => input.current?.click()} title={`Copy files into ${fileName(destination)}`} aria-label="Add files"><Icon name="plus" size={16} /></button>
@@ -301,6 +303,6 @@ export default function FilesRail() {
       <div className="file-transfer-status" aria-live="polite">{error && <p className="desk-error-inline">{error}</p>}{status && <p>{status}</p>}<small title={destination}>{copying ? 'Transferring files…' : `Drag to move · ${isMac ? '⌘⌫' : 'Delete'} to ${trashName}`}</small></div>
       <footer><button onClick={() => navigate(repo)}>MR-MAK root</button></footer>
     </div>}
-    <div className="files-rail">{(['files', 'skills', 'rules', 'mcp', 'settings'] as const).map(name => <button key={name} className={`rail-tool ${open && panel === name ? 'active' : ''}`} onClick={() => showPanel(name)} title={name === 'mcp' ? 'MCP' : name[0].toUpperCase() + name.slice(1)} aria-label={`Toggle ${name}`} aria-pressed={open && panel === name}><Icon name={name === 'files' ? 'folder' : name} size={18} /><span>{name === 'mcp' ? 'MCP' : name}</span></button>)}<button className="rail-tool" title="Workspace help" aria-label="Open Workspace help" onClick={() => api<Preview>('/preview?path=workspace%2F_shared%2Fhelp.md').then(setPreview).catch(reportError)}><Icon name="help" size={18} /><span>Help</span></button><div className="rail-spacer" /><button className="desk-icon" title="Show Chats" onClick={() => windowAction('chats')}><Icon name="chats" size={18} /></button></div>
+    <div className="files-rail">{(['files', 'skills', 'rules', 'mcp', 'coordinator', 'settings'] as const).map(name => <button key={name} className={`rail-tool ${open && panel === name ? 'active' : ''}`} onClick={() => showPanel(name)} title={name === 'mcp' ? 'MCP' : name[0].toUpperCase() + name.slice(1)} aria-label={`Toggle ${name}`} aria-pressed={open && panel === name}><Icon name={name === 'files' ? 'folder' : name} size={18} /><span>{name === 'mcp' ? 'MCP' : name}</span></button>)}<button className="rail-tool" title="Workspace help" aria-label="Open Workspace help" onClick={() => api<Preview>('/preview?path=workspace%2F_shared%2Fhelp.md').then(setPreview).catch(reportError)}><Icon name="help" size={18} /><span>Help</span></button><div className="rail-spacer" /><button className="desk-icon" title="Show Chats" onClick={() => windowAction('chats')}><Icon name="chats" size={18} /></button></div>
   </aside>
 }

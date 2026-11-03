@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { coordinatorTools } from '../coordinator.mjs';
@@ -38,4 +38,26 @@ test('through the real coordinator tools: assign, receipt, refused close, indepe
     assert.equal((await run('close_task', { id: 'quoins' })).status, 'closed');
     assert.deepEqual((await run('list_assignments', {})).open, []);
   } finally { await service.close(); }
+});
+
+test('send_to_chat on the owning chat records the task text the stall watch re-sends', async () => {
+  const repo = await repoWithWorkspace(), stateDir = path.join(repo, '.mrmak');
+  process.env.MRMAK_NO_WATCHDOG = '1';
+  const bin = await mkdtemp(path.join(os.tmpdir(), 'mrmak-fake-agent-')), previousPath = process.env.PATH;
+  await writeFile(path.join(bin, 'claude'), '#!/usr/bin/env node\nprocess.stdin.resume(); setInterval(() => {}, 1000);\n'); await chmod(path.join(bin, 'claude'), 0o755);
+  process.env.PATH = bin + path.delimiter + previousPath;
+  const service = await createService({ repo, uiDir: repo, stateDir, mcpOptions: { home: repo, env: {} } });
+  try {
+    const session = await service.sessions.create({ agent: 'claude', cwd: repo, name: 'Quoin Work', bypass: false });
+    const run = (name, args) => service.coordinator.execute(name, args, 'op-' + name, 'test');
+    await run('assign_task', { id: 'q', title: 'Quoins', intent: 'the soffit is the reference', owner: session.id });
+    assert.equal(service.coordinator.execute && (await run('list_assignments', {})).open[0].dispatch, undefined, 'nothing is re-sendable before the task is sent');
+    await run('send_to_chat', { id: session.id, text: 'Make every quoin stack meet the soffit line.' });
+    const task = (await run('list_assignments', {})).open[0];
+    assert.equal(task.dispatch.text, 'Make every quoin stack meet the soffit line.'); assert.equal(task.dispatch.redispatches, 0);
+    // Negative: a message to a chat that owns no assignment records nothing.
+    const other = await service.sessions.create({ agent: 'claude', cwd: repo, name: 'Other Work', bypass: false });
+    await run('send_to_chat', { id: other.id, text: 'unrelated' });
+    assert.equal((await run('list_assignments', {})).open.filter(item => item.dispatch).length, 1);
+  } finally { delete process.env.MRMAK_NO_WATCHDOG; process.env.PATH = previousPath; await service.close(); }
 });

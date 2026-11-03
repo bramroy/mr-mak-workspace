@@ -37,8 +37,10 @@ export class Assignments {
     await saveJson(this.charterFile, { dispatcherId: this.dispatcherId, text: this.charter });
     return this;
   }
-  save() { return saveJson(this.file, { tasks: [...this.tasks.values()] }); }
+  async save() { await saveJson(this.file, { tasks: [...this.tasks.values()] }); this.onChange?.(); }
+  snapshot(identity = null) { const all = [...this.tasks.values()]; return { dispatcher: this.dispatcherId, identity, charter: this.charter, open: all.filter(task => task.status !== 'closed'), closed: all.filter(task => task.status === 'closed').slice(-20) }; }
   get(id) { const task = this.tasks.get(id); if (!task) throw new Error('Unknown assignment.'); return task; }
+  owns(owner) { return this.open().some(task => task.owner === owner && task.dispatcher === this.dispatcherId); }
   open() { return [...this.tasks.values()].filter(task => task.status !== 'closed'); }
   async assign({ id = randomUUID().slice(0, 8), title, intent, repo, branch, baseSha, owner, link }) {
     if (!String(title || '').trim()) throw new Error('Give the task a short title.');
@@ -54,6 +56,17 @@ export class Assignments {
     this.tasks.set(id, task); await this.save(); return task;
   }
   held(task) { if (task.status === 'closed') throw new Error('This assignment is closed.'); if (task.dispatcher !== this.dispatcherId) throw Object.assign(new Error(`Another dispatcher (${task.dispatcher}) holds this task.`), { status: 409 }); }
+  // Called when the coordinator sends the task text to the owning chat. This is what the stall watch re-sends.
+  async markDispatched(owner, text, now = Date.now()) {
+    const task = this.open().find(item => item.owner === owner && item.dispatcher === this.dispatcherId);
+    if (!task) return null;
+    task.dispatch = { text: String(text).slice(0, 6000), at: new Date(now).toISOString(), redispatches: 0 }; task.stalled = null; await this.save(); return task;
+  }
+  async noteRedispatch(id, reason, now = Date.now()) {
+    const task = this.get(id); this.held(task);
+    task.dispatch = { ...task.dispatch, redispatches: (task.dispatch?.redispatches || 0) + 1, lastRedispatchAt: new Date(now).toISOString(), lastReason: reason }; await this.save(); return task;
+  }
+  async noteStalled(id, reason) { const task = this.get(id); task.stalled = { reason, at: new Date().toISOString() }; await this.save(); return task; }
   async receipt(id, { sha, link, checks, negativeSeenFailing, note }) {
     const task = this.get(id); this.held(task);
     if (!SHA.test(String(sha || ''))) throw new Error('A receipt needs the exact commit ID.');
@@ -61,7 +74,7 @@ export class Assignments {
     const clean = checks.map(check => ({ name: String(check?.name || '').trim(), result: normalizeResult(check?.result) }));
     if (clean.some(check => !check.name)) throw new Error('Every check needs a name.');
     const receipt = { sha: sha.toLowerCase(), link: link || null, checks: clean, negativeSeenFailing: negativeSeenFailing === true, note: note || null, at: new Date().toISOString() };
-    task.receipts.push(receipt); task.status = 'receipted'; await this.save(); return receipt;
+    task.receipts.push(receipt); task.status = 'receipted'; task.stalled = null; await this.save(); return receipt;
   }
   async verdict(id, { verifier, sha, result, note }) {
     const task = this.get(id); this.held(task);
