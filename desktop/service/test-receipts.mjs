@@ -32,7 +32,8 @@ export async function runReceipt({ cwd, repo, suite, command, privateKeyPem, run
   const sha = await git(cwd, ['rev-parse', 'HEAD']);
   if (!sha) throw new Error('This folder is not a git repository with a commit.');
   const treeClean = (await git(cwd, ['status', '--porcelain'])) === '';
-  const pushed = !!(await git(cwd, ['branch', '-r', '--contains', sha]));
+  // On the remote: either a remote-tracking branch contains it, or the remote itself lists it as a branch tip (a shallow or fresh clone has no tracking refs).
+  const pushed = !!(await git(cwd, ['branch', '-r', '--contains', sha])) || String(await git(cwd, ['ls-remote', '--heads', 'origin']) || '').split('\n').some(line => line.startsWith(sha));
   const { output, exitCode } = await new Promise(resolve => {
     const clean = { ...env, CI: '1', NO_COLOR: '1' }; delete clean.NODE_TEST_CONTEXT; // A runner started inside another node:test run must still print its own summary.
     const child = spawn(command, { cwd, shell: true, env: clean });
