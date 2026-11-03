@@ -16,10 +16,10 @@ export function wrapCommand(file, args = []) {
 }
 
 export const AGENTS = [
-  { id: 'codex', label: 'Codex', color: '#88d8bf', command: 'codex', subscription: true },
-  { id: 'claude', label: 'Claude Code', color: '#dba68c', command: 'claude', subscription: true },
+  { id: 'codex', label: 'Codex', color: '#88d8bf', command: 'codex', subscription: true, install: 'npm install -g @openai/codex' },
+  { id: 'claude', label: 'Claude Code', color: '#dba68c', command: 'claude', subscription: true, install: 'npm install -g @anthropic-ai/claude-code' },
   { id: 'antigravity', label: 'Antigravity', color: '#8ab4f8', command: 'agy', subscription: true },
-  { id: 'opencode', label: 'OpenCode', color: '#c8d2dc', command: 'opencode', subscription: false },
+  { id: 'opencode', label: 'OpenCode', color: '#c8d2dc', command: 'opencode', subscription: false, install: 'npm install -g opencode-ai' },
   { id: 'kimi', label: 'Kimi', color: '#b3a3f7', command: 'kimi', subscription: true },
   { id: 'shell', label: shellLabel(), color: '#89b7ed', command: 'shell', subscription: false },
 ];
@@ -31,7 +31,7 @@ export function commandPath(name, env = process.env, home) {
 export function inventory(env = process.env) {
   const shell = shellCommand(env);
   const shellAvailable = path.isAbsolute(shell.file) ? existsSync(shell.file) : !!commandPath(shell.file, env);
-  return AGENTS.map(agent => ({ ...agent, available: agent.id === 'shell' ? shellAvailable : !!commandPath(agent.command, env) }));
+  return AGENTS.map(agent => { const available = agent.id === 'shell' ? shellAvailable : !!commandPath(agent.command, env); return { ...agent, available, ...(available || agent.id === 'shell' ? {} : { recovery: missingAgentMessage(agent.id) }) }; });
 }
 
 // Claude Code without a shell between it and its JSON stream. The npm shim on
@@ -101,6 +101,14 @@ export function codexSupportsNoDaemon(env = process.env) {
   return codexHelp.get(key);
 }
 
+// What to tell the owner when an agent's command cannot be found. Mr. Mak never installs it, signs in or edits the
+// owner's PATH itself; it names the missing program and the step the owner takes.
+export function missingAgentMessage(agent) {
+  const item = AGENTS.find(entry => entry.id === agent);
+  if (!item) return 'Unknown agent';
+  return `${item.label} is not installed on this computer (the \`${item.command}\` command was not found). ${item.install ? `Install it with \`${item.install}\`, sign in once, ` : 'Install it and sign in once, '}then reopen Mr. Mak or press Refresh. Mr. Mak does not install or sign in for you.`;
+}
+
 export function terminalCommand(agent, { bypass = false, resumeId, nativeId, effort, model, settings, opencodeMajor = 1, antigravityLog, initialPrompt, readDir, noDaemon = false, instructions, planServer } = {}) {
   if (!AGENTS.some(item => item.id === agent)) throw new Error('Unknown agent');
   resumeId = nativeConversationId(resumeId); nativeId = nativeConversationId(nativeId);
@@ -109,7 +117,7 @@ export function terminalCommand(agent, { bypass = false, resumeId, nativeId, eff
   if (instructions != null && (typeof instructions !== 'string' || !path.isAbsolute(instructions) || /[\x00-\x1f]/.test(instructions))) throw new Error('The chat instructions file is not valid.');
   if (readDir != null && (typeof readDir !== 'string' || !path.isAbsolute(readDir) || /[\x00-\x1f]/.test(readDir))) throw new Error('Choose an absolute folder.');
   const command = agent === 'shell' ? shellCommand() : { file: commandPath(AGENTS.find(item => item.id === agent).command), args: [] };
-  if (!command || !command.file) throw new Error(`${agent} is not installed on this computer`);
+  if (!command || !command.file) throw new Error(missingAgentMessage(agent));
   if (agent === 'shell' && (path.isAbsolute(command.file) ? !existsSync(command.file) : !commandPath(command.file))) throw new Error('The local shell is not available on this computer');
   const args = [];
   if (agent === 'codex') {
