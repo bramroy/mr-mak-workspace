@@ -172,7 +172,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'open_chat': {
           args = openChatArguments(args);
           if (args.bypass === true && settings.defaultBypass !== true) throw new Error('To enable bypass, choose it yourself in New chat or Settings. Mr. Mak cannot raise the selected permission level.');
-          const session = await sessions.create({ agent: args.agent, cwd: args.cwd, name: taskTitle(args.name), effort: taskEffort(latestRequest, args.effort), bypass: args.bypass === false ? false : settings.defaultBypass === true });
+          const session = await sessions.create({ agent: args.agent, cwd: args.cwd, name: taskTitle(args.name), effort: taskEffort(latestRequest, args.effort), bypass: args.bypass === false ? false : settings.defaultBypass === true, group: args.group });
           focus(session.id); return session;
         }
         case 'read_chat': return sessions.read(args.id);

@@ -61,3 +61,19 @@ test('send_to_chat on the owning chat records the task text the stall watch re-s
     assert.equal((await run('list_assignments', {})).open.filter(item => item.dispatch).length, 1);
   } finally { delete process.env.MRMAK_NO_WATCHDOG; process.env.PATH = previousPath; await service.close(); }
 });
+
+test('open_chat with a studio group lands the worker tab in that group; an unknown group is refused and opens nothing', async () => {
+  const repo = await repoWithWorkspace(), stateDir = path.join(repo, '.mrmak');
+  process.env.MRMAK_NO_WATCHDOG = '1';
+  const bin = await mkdtemp(path.join(os.tmpdir(), 'mrmak-fake-agent-')), previousPath = process.env.PATH;
+  await writeFile(path.join(bin, 'claude'), '#!/usr/bin/env node\nprocess.stdin.resume(); setInterval(() => {}, 1000);\n'); await chmod(path.join(bin, 'claude'), 0o755);
+  process.env.PATH = bin + path.delimiter + previousPath;
+  const service = await createService({ repo, uiDir: repo, stateDir, mcpOptions: { home: repo, env: {} } });
+  try {
+    const run = (name, args) => service.coordinator.execute(name, args, 'op-' + name + Math.random(), 'open a chat');
+    const session = await run('open_chat', { agent: 'claude', name: 'Quoin Work', cwd: repo, group: 'Wizard' });
+    assert.equal(service.sessions.get(session.id).group, 'Wizard');
+    await assert.rejects(run('open_chat', { agent: 'claude', name: 'Other Work', cwd: repo, group: 'Random Group' }), /studio group/);
+    assert.equal(service.sessions.list().length, 1);
+  } finally { delete process.env.MRMAK_NO_WATCHDOG; process.env.PATH = previousPath; await service.close(); }
+});

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, onServiceEvent, reportError } from './client'
+import { api, onServiceEvent, reportError, useDesktop } from './client'
 import { Icon } from './Icons'
 import { bobNative, hasBobNative, type BobTab } from './bobSessionState'
 
@@ -24,10 +24,11 @@ export function BobTabStrip({ tabs, selectedId, choose, close, patch }: {
   </div>
 }
 
-interface BobQuestion { id: string; title: string; question: string; status: string }
+interface BobQuestion { id: string; title: string; question: string; status: string; createdAt?: string; sourceChatId?: string | null }
 export function BobBrowserPanel({ tab, tabs, suspended }: {tab: BobTab; tabs: BobTab[]; suspended: boolean}) {
   const region = useRef<HTMLDivElement>(null)
   const [questions,setQuestions] = useState<BobQuestion[]>([])
+  const { sessions } = useDesktop()
   const [inbox,setInbox] = useState(false)
   const nativeAvailable = hasBobNative()
   const refresh = () => api<{questions:BobQuestion[]}>('/bob-questions').then(result => setQuestions(result.questions)).catch(reportError)
@@ -52,7 +53,7 @@ export function BobBrowserPanel({ tab, tabs, suspended }: {tab: BobTab; tabs: Bo
       <button onClick={() => {setInbox(!inbox);if(!inbox)refresh()}}><Icon name="inbox" size={14}/> Ask Bob inbox {questions.length ? '('+questions.length+')':''}</button></div>
     {inbox && <div className="bob-questions" role="dialog" aria-label="Ask Bob review inbox"><strong>Review the coordinator's question before sending it</strong><p>Questions are drafts until you copy them into a Bob conversation and press Send.</p>
       {!questions.length && <p>No questions waiting. Ask the Mr. Mak coordinator to queue an architectural question for Bob.</p>}
-      {questions.map(q=><div key={q.id}><b>{q.title}</b><textarea readOnly rows={3} value={q.question} aria-label={q.title}/>
+      {questions.map(q=><div key={q.id}><b>{q.title}</b><small className="bob-question-source" data-testid="bob-question-source">{'From '+(sessions.find(item=>item.id===q.sourceChatId)?.name||(q.sourceChatId?'a closed chat':'the coordinator'))+(q.createdAt?' · '+new Date(q.createdAt).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'')}</small><textarea readOnly rows={3} value={q.question} aria-label={q.title}/>
         <button onClick={() => navigator.clipboard.writeText(q.question).catch(reportError)}>Copy for Bob</button>
         <button onClick={() => api('/bob-questions/'+q.id+'/dismiss',{}).then(refresh).catch(reportError)}>Dismiss</button></div>)}
       <button onClick={() => setInbox(false)}>Close inbox</button></div>}

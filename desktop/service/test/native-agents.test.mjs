@@ -26,3 +26,11 @@ test('every agent that can be missing names its program, and a found command is 
   const env = { PATH: bin, HOME: os.tmpdir() }, codex = inventory(env).find(item => item.id === 'codex');
   assert.equal(codex.available, true); assert.equal(codex.recovery, undefined);
 });
+
+import { openChatArguments, STUDIO_GROUPS } from '../coordinator.mjs';
+test('the coordinator opens worker chats in the studio tab groups only', () => {
+  assert.deepEqual(STUDIO_GROUPS, ['Wizard', 'WorldTools', 'Doo', 'Studio Operations', 'Bob / Reviews']);
+  for (const group of STUDIO_GROUPS) assert.equal(openChatArguments({ agent: 'claude', name: 'Quoin Work', group }).group, group);
+  assert.equal('group' in openChatArguments({ agent: 'claude', name: 'Quoin Work' }), false);
+  for (const bad of ['wizard', 'Random', '', 7, {}]) assert.throws(() => openChatArguments({ agent: 'claude', name: 'Quoin Work', group: bad }), /studio group/);
+});
