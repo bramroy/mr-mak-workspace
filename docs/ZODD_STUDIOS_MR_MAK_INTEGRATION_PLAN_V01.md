@@ -1,16 +1,16 @@
 # Zodd Studios — Mr. Mak Integration & Coordinator Acceptance Plan V01
 
 **Owner:** Bob (Mr. Mak integration / architecture), with implementation and independent proof delegated by named assignment.  
-**Status:** Creator-directed rebuild scope; installed production promotion remains approval-gated. **Creator rulings, 2026-11-02:** (1) legacy recovered Claude/OpenCode sessions were test fixtures, not production migration gates; (2) the **Sonnet coordinator is a required, integrated deliverable of the Mr. Mak rebuild**, not a later or optional cutover. Team Opus has already been informed by the creator.  
+**Status:** Creator-directed rebuild and **workflow-first cutover**; installed production promotion remains approval-gated. **Creator rulings, 2026-11-02:** (1) legacy recovered Claude/OpenCode sessions were test fixtures, not production migration gates; (2) Sonnet is a **required integrated part of the Mr. Mak rebuild**; (3) the creator is **moving to the new coordination workflow before Wizard 3.5 is closed**, because the old workflow costs days rather than hours. Team Opus has already been informed directly.  
 **Date:** 2026-11-02. **Candidate branch:** `bob/browser-backed-tabs-v01`; reference SHA before this document: `1373c22c3e7897d37b51085c1e3730baff6fa06f`.
 
 ## 1. Decision and scope
 
 **Finish the existing Mr. Mak Workspace cockpit; do not create a parallel manager.** The product is the existing native desktop app with Bob/ChatGPT browser tabs and Claude, Codex and OpenCode worker tabs alongside Roblox Studio. A **Sonnet agent is the required coordinator/dispatcher in the rebuilt Mr. Mak**, not Codex or Bob. Bob reviews architecture/integration; GitHub remains the source of truth for assignments, decisions and verification.
 
-**Creator-directed scope:** Build and integrate the Sonnet coordinator **as part of this Mr. Mak rebuild**, alongside native tabs, agent wrappers and Ask Bob. Its design, wiring, actual model-identity proof and end-to-end behavior are **required for Mr. Mak rebuild acceptance before installed promotion**, not optional follow-on work. Wizard Contractor 3.5 may adopt the new engineering rules with its existing authorized release owner; **Mr. Mak coordinator completion is not a Wizard 3.5 release gate**. Likewise, no Mr. Mak personalization is permission to change game/shared-engine repositories.
+**Creator-directed scope and sequence:** Build and integrate the Sonnet coordinator **in the Mr. Mak rebuild** and deploy a proved new workflow **before completing Wizard Contractor 3.5**. This is now the priority operational dependency, not a post-release extra. The old dispatcher must stop being the default after a bounded witnessed handoff; do not require the old workflow to finish 3.5 first. The new workflow itself must demonstrate model identity, persistence, real-path verification, handoff and accountable task closure. This does **not** mean Sonnet is an additional test of the game bake or that the game must await cosmetic cockpit polish/native Codex setup. Do not simultaneously dispatch the same task from both old and new coordinators. Mr. Mak personalization is not permission to change game/shared-engine repositories.
 
-Desired outcome: a recoverable, stable native Windows cockpit **with functioning Sonnet coordinator included in the build**, optional Zodd Studios presentation, native Codex availability, reviewable Ask Bob handoffs, and real coordinator task state surviving a session handoff. Complete the integrated M3 proof before approving this rebuilt app for installed promotion; retirement of the old dispatcher workflow remains a separate producer decision. Do not retire Claude as a worker.
+Desired outcome: a recoverable native Windows cockpit **with functioning Sonnet coordinator included** and an **early operational handoff of remaining Wizard 3.5 work**, with reviewable Ask Bob drafts, persistent receipts and independent proof. Native Codex setup and optional branding remain part of the broader rebuild but **must not delay a safe coordinator-first cutover** if Claude/OpenCode workers already cover the needed job. Complete M0, sufficient M1, M3 and an approved installation/rollback before handing off active Wizard tasks. Retirement/cleanup of obsolete worker systems remains separately audited; stopping duplicate dispatch for transferred tasks does not authorize deleting their history. Do not retire Claude as a worker.
 
 ## 2. Current evidence (source-of-truth status)
 
@@ -28,7 +28,9 @@ Desired outcome: a recoverable, stable native Windows cockpit **with functioning
 
 **Evidence freshness:** GitHub branch and CI above were checked on 2026-11-02; the authorized Windows laptop was **offline** during this review, so current local running-app state and the separate `C:\Roblox Projects\_MrMakTrial\ZoddStudio-Cockpit-Review\CLAUDE_IMPLEMENTATION_PLAN_V01.md` could not be re-read. That Claude plan and the local backups are supporting inputs to reconcile when the laptop is online, **not** a newly verified acceptance result. The earlier browser-session contract contains dated open work; use the current source and these gates rather than treating its old NOT IMPLEMENTED lines as today's definitive state.
 
-## 3. Delivery lanes, in required order
+## 3. Delivery lanes and revised workflow-first sequence
+
+**Critical path to rescue Wizard 3.5:** M0 (current-state backup and isolated restore) + M1 (minimum native security/session/Ask Bob smoke) **in parallel with building M3** → independent end-to-end M3 proof → M5 approved installation of the Sonnet-enabled build and rollback readiness → **C1 real Wizard task handoff** → **C2 remaining Wizard 3.5 assignments transferred under a single new dispatcher**. M2 native Codex and M4 optional identity may continue on disjoint lanes, and are not extra blockers for cutover unless their specific functionality is required to complete the active Wizard task. Do not hold all agent work idle during construction: the old team can finish already-owned safety-critical tasks until each is explicitly transferred, but must not create overlapping new dispatches.
 
 ### M0 — Protect the baseline and name custodians
 
@@ -74,9 +76,9 @@ Implement the coordinator inside the rebuilt Mr. Mak's existing agent/Chats and 
 4. Receive a real commit/evidence receipt, have a **different** reviewer run or inspect the proof, distinguish PASS/FAIL/NOT RUN, and escalate a real exception using the review-only Ask Bob draft (creator must send explicitly).
 5. Restart/replace **only the isolated test coordinator session**. Show the role charter, task state, pending ownership and evidence survive handoff, with one dispatcher per assignment. Close the GitHub task with a receipt.
 
-**Gate M3 (mandatory for Mr. Mak rebuild):** native integration, complete end-to-end task receipt, independent verdict, restart continuity and negative proof **PASS** on the rebuilt candidate. Skills, screenshots or one model reply do not count. M3 is **required before M5 installed promotion**; it does **not** gate the Wizard 3.5 bake. No live dispatcher replacement or retired workflow until separate approved cutover.
+**Gate M3 (mandatory for Mr. Mak rebuild and workflow-first cutover):** native integration, complete end-to-end task receipt, independent verdict, restart continuity and negative proof **PASS** on the rebuilt candidate. Skills, screenshots or one model reply do not count. M3 is **required before M5**. The creator expressly wants the new Sonnet workflow used **to finish Wizard 3.5**; it must therefore be operational and take responsibility for remaining work before the final bake/closure, after the bounded C1 handoff. No premature dual dispatch.
 
-### M4 — Minimal Zodd Studios personalization (only after M1 is stable)
+### M4 — Zodd Studios personalization (nonblocking for coordinator-first cutover)
 
 **Implementation:** one UI owner at a time; **review:** Bob + creator.
 
@@ -96,7 +98,15 @@ Implement the coordinator inside the rebuilt Mr. Mak's existing agent/Chats and 
 - If regression occurs, restore the original installed build and separately protected **current** state. Historic test-session restoration is optional, not a reason to delay promotion. Record exact PASS/FAIL/NOT RUN rather than declaring installation a success.
 - Publish an operations note: how to open the correct Bob conversation, route Ask Bob drafts, start native Codex, recover sessions, find GitHub receipts and back out safely.
 
-**Gate M5:** user-observed installed version **including Sonnet coordinator**, M1/M2/M3 acceptance, verified restore path and creator signoff. **The old coordination workflow's retirement requires M3/M5 plus the separate producer's audit; nothing here silently authorizes retirement.**
+**Gate M5 (urgent coordinator-enabled operational installation):** user-observed installed version **including Sonnet coordinator**, M0/M1/M3 acceptance, verified rollback and explicit creator approval. M2 native Codex and M4 cosmetics must be fully accepted for their own deliverables but may follow the coordinator-first deployment when not needed for active work. Begin C1/C2 immediately after approved M5 and independent proof. Decommissioning/cleaning up the old workflow still requires the producer's separate retirement audit.
+
+### C1 / C2 — Live Wizard 3.5 workflow takeover (before final bake)
+
+**C1 — witnessed transfer:** The existing producer identifies **one bounded outstanding Wizard 3.5 task** from the current canonical punch list, exact game/build SHA and incumbent owner. The new Sonnet coordinator acknowledges it in GitHub, checks for active ownership and permitted worker/model, dispatches one task without duplicating the old dispatcher, receives a real-path behavior proof **including a failing negative**, requests a non-author verdict, posts the exact-SHA receipt and same-day closeout. Creator playtest wording remains the acceptance sentence; where a cause exists, include the kaizen cause card. Keep privileged merge/release authority with the actual owner. **PASS** only if the task really moved under the new operating contract.
+
+**C2 — remaining work:** After a C1 PASS, the producer transfers each remaining 3.5 owner/task with an acknowledgement, named receiver and GitHub source. The old coordinator ceases dispatch for these transferred tasks; preserve rollback and history. The new coordinator then drives the remaining release work through the new rules, including normal-scope fixes/merges, independent proofs and the real final bake. No duplicated status ledger, unowned tasks, dual dispatch or temporary loss of creator decisions. The owner retains public-release go/no-go.
+
+**Cutover is a gate on changing dispatchers, not a pretext for another set of generic headless game tests; the real Wizard task provides the proof.**
 
 ## 4. Authority and operating rules
 
@@ -104,7 +114,8 @@ Implement the coordinator inside the rebuilt Mr. Mak's existing agent/Chats and 
 | --- | --- |
 | Scoped code/tests on a candidate branch, no running-worker interference | Named implementation owner, with reviewer and exact-SHA receipt |
 | Architectural boundaries, model/auth/security review | Bob integration |
-| GitHub task coordination for Wizard 3.5 while Sonnet is unproven | Existing producer-authorized release workflow |
+| Existing Wizard task before acknowledged transfer | Incumbent producer-authorized owner; do not duplicate dispatch |
+| Wizard tasks after C1 PASS and C2 acknowledged per-task transfer | New native Sonnet coordinator owns dispatch/receipts; existing release owner retains consequential technical/public-release authority |
 | Implement and independently prove Sonnet coordinator **within the rebuilt app** | Named M3 implementation and verification owners; non-production test tasks until creator-approved installed deployment |
 | Change active dispatcher or promote native installed build | Creator go/no-go after independent evidence |
 | Public Roblox release, game-engine merges or repins | Owning release authority; **out of scope** |
@@ -116,8 +127,8 @@ Use one durable issue/PR/commit receipt per task. No second shadow backlog in Mr
 
 1. **Integration owner (Bob):** maintain this plan, review exact-SHA proofs, request a named local Windows executor when the laptop reconnects. Reconcile the existing Claude plan and current branch; document any differences explicitly.
 2. **Windows QA / app builder:** perform M0 private backup+restore and M1 native security/UX witness without touching the installed app. Report exact version, screen evidence, negative tests and remaining blockers.
-3. **Native agent owner:** verify Codex CLI absence/presence and prepare a contained native installation/proof proposal. Do **not** install or migrate sessions without approval.
-4. **Sonnet coordinator implementation + proof owner:** wire M3 into the actual rebuilt native app, then run a disposable test and handoff receipts. M3 runs alongside the rebuild and **must finish before M5**, while Wizard 3.5 proceeds independently.
-5. **After integrated M0–M3 gates:** complete remaining personalization, rehearse rollback, and request creator approval to promote the **complete rebuilt app**, not a cockpit-only interim version.
+3. **Native agent owner (parallel/nonblocking):** verify Codex CLI absence/presence and prepare a contained native installation/proof proposal. Do **not** install or migrate sessions without approval. Codex need not block a functioning Sonnet-to-Claude/OpenCode task path.
+4. **Sonnet coordinator owner (critical path):** build and prove M3 in the actual native app, then prepare M5 rollback/installed acceptance and coordinate **C1 live Wizard task handoff followed by C2**. This new operational workflow is to be in use **before Wizard 3.5 completion**.
+5. **After integrated M0/M1/M3 gates:** rehearse rollback and request creator approval to promote the **Sonnet-enabled rebuilt app**; complete C1/C2 before the Wizard final bake/closure. Finish noncritical M2/M4 improvements without delaying this move.
 
 **Explicitly NOT RUN now:** local backup restore of the **current** cockpit state; native GUI/login stress on the exact final build; security/UI operator witness; native Codex; live Sonnet coordinator; installed promotion; retirement. This file is a **plan and accountability baseline**, not proof that these actions happened.
