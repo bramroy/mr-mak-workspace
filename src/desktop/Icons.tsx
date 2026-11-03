@@ -19,6 +19,7 @@ export function Icon({ name, size = 18, style }: { name: string; size?: number; 
     menu: 'M4 6h16M4 12h16M4 18h16',
     phone: 'M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2ZM10 5h4M11 19h2',
     help: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM9.1 8a3 3 0 0 1 5.8 1c0 2-3 2-3 4M12 17h.01',
+    coordinator: 'M12 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM5 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2M3 9h3M18 9h3',
     mcp: 'M8 3v5M16 3v5M5 8h14v3a7 7 0 0 1-14 0ZM12 18v4',
     skills: 'M12 3 2 8l10 5 10-5ZM5 10v7l7 4 7-4v-7M22 8v7', rules: 'M10 6h10M10 12h10M10 18h10M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2',settings: 'M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6',
     plus: 'M12 5v14M5 12h14', close: 'm6 6 12 12M18 6 6 18', folder: 'M3 7V5h6l2 2h10v13H3Z', files: 'M7 3h10l4 4v14H7ZM3 7v14',

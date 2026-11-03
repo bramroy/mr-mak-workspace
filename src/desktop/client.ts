@@ -108,7 +108,7 @@ function connect() {
   socket.onopen = () => socket?.send(JSON.stringify({ type: 'auth', token, clientId, surface }))
   socket.onmessage = ({ data }) => {
     const event = JSON.parse(data) as ServiceEvent
-    if (event.type === 'connected') update({ connected: true, sessions: event.sessions || state.sessions, selectedId: event.selectedId ?? state.selectedId, coordinator: event.state || state.coordinator, error: null })
+    if (event.type === 'connected') update({ connected: true, sessions: event.sessions || state.sessions, selectedId: event.selectedId ?? state.selectedId, coordinator: event.state || state.coordinator, coordinatorIdentity: event.coordinatorIdentity ?? state.coordinatorIdentity, error: null })
     if (event.type === 'selection') update({ selectedId: event.selectedId || null })
     if (event.type === 'session' && event.session) {
       const next = event.session
@@ -119,7 +119,7 @@ function connect() {
       update({ sessions, selectedId: state.selectedId === event.id ? sessions[0]?.id || null : state.selectedId })
     }
     if (event.type === 'service-error') reportError(event.error || 'Connection error')
-    if (event.type === 'coordinator-state') update({ coordinator: event.state || 'idle' })
+    if (event.type === 'coordinator-state') update({ coordinator: event.state || 'idle', coordinatorIdentity: event.identity ?? state.coordinatorIdentity })
     if (event.type === 'coordinator-result' && event.operation) {
       const operation = event.operation
       update({ operations: [...state.operations.filter(item => item.id !== operation.id), operation].slice(-50) })

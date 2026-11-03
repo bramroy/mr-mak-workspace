@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { readFile, stat, realpath } from 'node:fs/promises';
@@ -8,7 +9,10 @@ import { Sessions } from './sessions.mjs';
 import { BrowserTabs } from './browser-tabs.mjs';
 import { BobQuestions } from './bob-questions.mjs';
 import { Coordinator, openChatArguments } from './coordinator.mjs';
-import { ClaudeCoordinator } from './coordinator-claude.mjs';
+import { processTreeCpuMs } from './platform.mjs';
+import { Assignments, githubChecks, WORKER_KINDS } from './assignments.mjs';
+import { DispatchWatchdog } from './watchdog.mjs';
+import { ClaudeCoordinator, CLAUDE_COORDINATOR_MODELS } from './coordinator-claude.mjs';
 import { Overseer } from './overseer.mjs';
 import { Files, serveFile } from './files.mjs';
 import { importFile, dragFiles, moveFile, recyclePath, MAX_FILE_BYTES } from './file-transfers.mjs';
@@ -62,7 +66,7 @@ async function projectFolder(value) {
 }
 const listen = server =>new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)); });
 
-export async function createService({ repo, uiDir, stateDir, token = secret(), native = () => {}, restoreSessions = false, mcpOptions, mobileOptions }) {
+export async function createService({ repo, uiDir, stateDir, token = secret(), native = () => {}, restoreSessions = false, mcpOptions, mobileOptions, verifyChecks = null }) {
   repo = await realpath(repo);
   stateDir ||= path.join(repo, '.mrmak');
   const dictation = mobileOptions?.dictation || new MobileDictation(repo);
@@ -87,7 +91,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const environment = parseEnv(await readFile(path.join(repo, '.env'), 'utf8').catch(() => ''));
   const settingsPath = path.join(stateDir, 'settings.json');
   const savedSettings = await readJson(settingsPath, null);
-  let settings = { defaultAgent: 'codex', defaultBypass: false, coordinatorModel: environment.MRMAK_COORDINATOR_MODEL?.trim() || null, terminalFontSize: 13, terminalAppearance: 'original', workspaceTheme: 'dark', coordinatorEffort: 'medium', voiceName: 'cedar', voiceStyle: defaultVoiceStyle, handoffAfter: 40, idleCacheMinutes: IDLE_CACHE_MINUTES, idleCacheMinTokens: IDLE_CACHE_MIN_TOKENS, groupTabsByProject: false, projectOrder: [], usageLimitMode: 'all', usageDirection: 'used', systemEvents: 'compact', agentPriority: 'below-normal', ...savedSettings };
+  let settings = { defaultAgent: 'codex', defaultBypass: false, coordinatorAgent: 'claude', coordinatorModel: environment.MRMAK_COORDINATOR_MODEL?.trim() || 'sonnet', terminalFontSize: 13, terminalAppearance: 'original', workspaceTheme: 'dark', coordinatorEffort: 'medium', voiceName: 'cedar', voiceStyle: defaultVoiceStyle, handoffAfter: 40, idleCacheMinutes: IDLE_CACHE_MINUTES, idleCacheMinTokens: IDLE_CACHE_MIN_TOKENS, groupTabsByProject: false, projectOrder: [], usageLimitMode: 'all', usageDirection: 'used', systemEvents: 'compact', agentPriority: 'below-normal', ...savedSettings };
   sessions.priority = settings.agentPriority;
   const effortAdvisor = new EffortAdvisor({ sessions, stateDir, transcripts, mode: () => settings.effortAdvice || 'off' });
   if (settings.groupTabsByProject === true) {
@@ -146,9 +150,19 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
     sessions.input(id, attachmentText(verified, session.agent), { coordinator, submit: false });
     return { attached: verified, submitted: false };
   };
+  const githubToken = () => environment.GITHUB_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim() || '';
+  const assignments = await new Assignments({ stateDir, verify: verifyChecks || (({ repo, sha }) => githubChecks({ repo, sha, token: githubToken() })) }).init();
+  assignments.onChange = () => broadcast('assignments', {});
+  // The worker's kind comes from the chat itself, never from what the model says it is.
+  const workerKindOf = owner => {
+    let session = null; try { session = sessions.get(String(owner)); } catch { /* Not a chat. */ }
+    const kind = session ? session.agent : browserTabs.state().tabs?.some?.(tab => tab.id === owner) ? 'bob' : null;
+    if (!kind || !WORKER_KINDS.includes(kind)) throw Object.assign(new Error('The owner must be a live chat (Claude, Codex or OpenCode) or a Bob tab. The worker kind is read from the chat itself, never from a name.'), { status: 409 });
+    return kind;
+  };
   // Talk to Mr. Mak runs on the coordinator the owner chose in Settings.
   const coordinatorOptions = {
-    repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: () => library.orientation(), settings: () => settings,
+    repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: async () => `${await library.orientation()}\n\n${assignments.orientation(coordinator?.identity())}`, settings: () => settings,
     context: () => ({ repo, localDate: localDay(), overseerMode: !!settings.overseer, selectedId, workspaceRoute, chats: sessions.active(), recentNotices: notices.slice(-5), recentRequests: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-6).map(({ text, result, status }) => ({ text, result, status })) }),
     execute: async (name, args, operationId, requestText) => {
       const latestRequest = requestText || coordinator.operations.get(operationId)?.text || '';
@@ -167,11 +181,11 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'open_chat': {
           args = openChatArguments(args);
           if (args.bypass === true && settings.defaultBypass !== true) throw new Error('To enable bypass, choose it yourself in New chat or Settings. Mr. Mak cannot raise the selected permission level.');
-          const session = await sessions.create({ agent: args.agent, cwd: args.cwd, name: taskTitle(args.name), effort: taskEffort(latestRequest, args.effort), bypass: args.bypass === false ? false : settings.defaultBypass === true });
+          const session = await sessions.create({ agent: args.agent, cwd: args.cwd, name: taskTitle(args.name), effort: taskEffort(latestRequest, args.effort), bypass: args.bypass === false ? false : settings.defaultBypass === true, group: args.group });
           focus(session.id); return session;
         }
         case 'read_chat': return sessions.read(args.id);
-        case 'send_to_chat': return sessions.input(args.id, args.text, { coordinator: true, submit: true });
+        case 'send_to_chat': { const sent = sessions.input(args.id, args.text, { coordinator: true, submit: true }); await assignments.markDispatched(args.id); return sent; }
         case 'attach_files': return attach(args.id, args.paths, true);
         case 'focus_chat': return focus(args.id);
         case 'rename_chat': return sessions.rename(args.id, args.name);
@@ -193,7 +207,15 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'list_skills': return knowledge.skills(args.query || '');
         case 'list_mcp': return mcp.list();
         case 'ask_bob': return bobQuestions.create(args);
-        case 'get_app_settings': return { voice: settings.voiceName, style: settings.voiceStyle, coordinator: coordinator.provider === 'claude' ? 'Claude Code' : 'Codex', model: coordinator.model || 'default', effort: settings.coordinatorEffort, billing: `${coordinator.provider === 'claude' ? 'Claude' : 'Codex'} subscription for the coordinator; OpenAI API for voice` };
+        case 'list_assignments': return { dispatcher: assignments.dispatcherId, open: assignments.open() };
+        case 'assign_task': if (args.proof) throw new Error('A proof task is started by the owner from the Coordinator panel, never by the coordinator.'); return assignments.assign(args, { identity: coordinator.identity(), workerKind: workerKindOf(args.owner) });
+        case 'record_receipt': return assignments.receipt(args.id, args);
+        case 'record_test_receipt': return assignments.localReceipt(args.id, args.receipt);
+        case 'record_verdict': return assignments.verdict(args.id, args);
+        case 'close_task': return assignments.close(args.id);
+        case 'handoff_task': return assignments.handoff(args.id, args.to);
+        case 'accept_task': return assignments.accept(args.id);
+        case 'get_app_settings': return { voice: settings.voiceName, style: settings.voiceStyle, coordinator: coordinator.provider === 'claude' ? 'Claude Code' : 'Codex', model: coordinator.observedModel || coordinator.model || 'default', modelRequested: coordinator.model || null, modelObserved: coordinator.observedModel || null, effort: settings.coordinatorEffort, billing: `${coordinator.provider === 'claude' ? 'Claude' : 'Codex'} subscription for the coordinator; OpenAI API for voice` };
         case 'update_voice': {
           if (typeof args.style === 'string' && args.style.trim()) settings.voiceStyle = args.style.trim().slice(0, 1800);
           if (['cedar', 'marin'].includes(args.voice)) settings.voiceName = args.voice;
@@ -208,13 +230,15 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const makeCoordinator = async (provider, previous) => {
     const next = new (coordinatorProviders[provider] || Coordinator)(coordinatorOptions);
     if (previous) { next.operations = previous.operations; previous.removeAllListeners(); previous.close(); } else await next.init();
-    next.on('state', state => broadcast('coordinator-state', { state }));
+    next.on('state', state => broadcast('coordinator-state', { state, identity: next.identity() }));
     next.on('result', operation => broadcast('coordinator-result', { operation }));
     next.on('error-detail', error => broadcast('service-error', { error }));
     return next;
   };
   let coordinator = await makeCoordinator(settings.coordinatorAgent);
-  const overseer = new Overseer({ chats: () => sessions.active(), ask: request => coordinator.ask(request), enabled: () => !!settings.overseer });
+  const watchdog = new DispatchWatchdog({ assignments, chats: () => sessions.active(), send: (id, text) => sessions.input(id, text, { coordinator: true, submit: true }), cpu: id => processTreeCpuMs(sessions.get(id).process?.pid), native: id => sessions.get(id).lastNativeAt || null, notify: ({ owner, title, text }) => { const notice = { id: randomUUID(), sessionId: owner, name: title, kind: 'attention', text, at: new Date().toISOString() }; notices.push(notice); if (notices.length > 100) notices.shift(); broadcast('notice', { notice }); } });
+  if (!process.env.MRMAK_NO_WATCHDOG) watchdog.start();
+  const overseer = new Overseer({ chats: () => sessions.active(), ask: request => coordinator.ask(request), enabled: () => !!settings.overseer, skip: id => assignments.owns(id) });
   overseer.update();
   const quick = await new QuickActions({ stateDir, workspace, context: () => ({ chats: sessions.active(), route: workspaceRoute }), execute: (...args) => coordinator.execute(...args), completed: operation => broadcast('coordinator-result', { operation }) }).init();
   const askMak = async data => {
@@ -294,7 +318,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'POST' && url.pathname === '/api/mobile/revoke') return json(response, 200, await mobile.revoke(data.id));
         if (method === 'GET' && url.pathname === '/api/bootstrap') {
           const keys = parseEnv(await readFile(path.join(repo, '.env'), 'utf8').catch(() => ''));
-          return json(response, 200, { browserTabs: browserTabs.state(), bobQuestions: bobQuestions.list(), repo, contentBase: `${files.origin}/view/${files.repoGrant}`, agents: inventory(), sessions: sessions.list(), settings, selectedId, notices, coordinator: coordinator.state, voice: { configured: !!(keys.OPENAI_API_KEY || keys.OPENAI_KEY || process.env.OPENAI_API_KEY), owner: voiceOwner }, voiceHistory, operations: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-30) });
+          return json(response, 200, { coordinatorIdentity: coordinator.identity(), browserTabs: browserTabs.state(), bobQuestions: bobQuestions.list(), repo, contentBase: `${files.origin}/view/${files.repoGrant}`, agents: inventory(), sessions: sessions.list(), settings, selectedId, notices, coordinator: coordinator.state, voice: { configured: !!(keys.OPENAI_API_KEY || keys.OPENAI_KEY || process.env.OPENAI_API_KEY), owner: voiceOwner }, voiceHistory, operations: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-30) });
         }
         // Browser-backed chats never inherit terminal-agent permissions.
         if (url.pathname === '/api/bob-questions' && method === 'GET') return json(response, 200, { questions: bobQuestions.list() });
@@ -333,6 +357,11 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'GET' && url.pathname === '/api/integrations') return json(response, 200, { providers: integrations.list(), bindings: integrations.bindings.map(({ providerId, externalId, workspaceId, boundAt }) => ({ providerId, externalId, workspaceId, boundAt })) });
         if (method === 'POST' && url.pathname === '/api/integrations/bind') return json(response, 200, await integrations.bind(data));
         if (method === 'GET' && url.pathname === '/api/native/settings') return json(response, 200, nativeSettings.value);
+        if (method === 'GET' && url.pathname === '/api/coordinator/assignments') return json(response, 200, assignments.snapshot(coordinator.identity()));
+        if (method === 'POST' && url.pathname === '/api/coordinator/proof') return json(response, 201, await assignments.startProof({ owner: data.owner, repo: data.repo, suites: data.suites }, { workerKind: workerKindOf(data.owner) }));
+        if (method === 'POST' && url.pathname === '/api/coordinator/runners') return json(response, 201, await assignments.registerRunner({ name: data.name, role: data.role, person: data.person, publicKeyPem: data.publicKeyPem }));
+        if (method === 'POST' && url.pathname === '/api/coordinator/suites') return json(response, 201, await assignments.pinSuite({ repo: data.repo, suite: data.suite, command: data.command }));
+        if (method === 'POST' && url.pathname === '/api/coordinator/cutover') return json(response, 200, await assignments.approveCutover('owner', coordinator.identity()));
         if (method === 'GET' && url.pathname === '/api/mcp') { const value = await mcp.list(); return json(response, 200, { ...value, engines: await engineStatus(value.servers) }); }
         if (method === 'POST' && url.pathname === '/api/skills/discover') return json(response, 200, await discoverSkills(await projectFolder(data.path)));
         if (method === 'POST' && url.pathname === '/api/skills/create') return json(response, 200, await createSkill(await projectFolder(data.path), data.candidate));
@@ -417,8 +446,14 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
           if (['medium', 'high'].includes(data.coordinatorEffort)) settings.coordinatorEffort = data.coordinatorEffort;
           if (['codex', 'claude'].includes(data.coordinatorAgent) && data.coordinatorAgent !== (settings.coordinatorAgent || 'codex')) {
             if (coordinator.state === 'working') throw Object.assign(new Error('Mr. Mak is answering a request. Change the coordinator when it finishes.'), { status: 409 });
-            settings.coordinatorAgent = data.coordinatorAgent; coordinator = await makeCoordinator(settings.coordinatorAgent, coordinator); broadcast('coordinator-state', { state: coordinator.state });
+            settings.coordinatorAgent = data.coordinatorAgent; coordinator = await makeCoordinator(settings.coordinatorAgent, coordinator); broadcast('coordinator-state', { state: coordinator.state, identity: coordinator.identity() });
           } else if (data.coordinatorEffort && coordinator.provider === 'claude' && coordinator.state !== 'working') coordinator.close(); // Claude takes its effort when it starts.
+          if (data.coordinatorModel !== undefined) {
+            if (!CLAUDE_COORDINATOR_MODELS.includes(data.coordinatorModel)) throw Object.assign(new Error(`Choose a coordinator model: ${CLAUDE_COORDINATOR_MODELS.join(', ')}.`), { status: 400 });
+            if (coordinator.state === 'working') throw Object.assign(new Error('Mr. Mak is answering a request. Change the model when it finishes.'), { status: 409 });
+            settings.coordinatorModel = data.coordinatorModel;
+            if (coordinator.provider === 'claude') { coordinator.close(); broadcast('coordinator-state', { state: coordinator.state, identity: coordinator.identity() }); } // Claude takes its model when it starts.
+          }
           if (typeof data.overseer === 'boolean') { settings.overseer = data.overseer; overseer.update(); }
           if (typeof data.planTool === 'boolean') settings.planTool = data.planTool;
           if (EFFORT_ADVICE.includes(data.effortAdvice)) settings.effortAdvice = data.effortAdvice;
@@ -599,7 +634,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (!ws.authenticated) {
           if (message.type !== 'auth' || !equalSecret(message.token, token)) return ws.close(1008, 'Authentication failed');
           ws.authenticated = true; ws.clientId = message.clientId; ws.surface = message.surface; clients.add(ws); clearTimeout(authTimer);
-          send(ws, 'connected', { sessions: sessions.list(), selectedId, coordinator: coordinator.state }); return;
+          send(ws, 'connected', { sessions: sessions.list(), selectedId, coordinator: coordinator.state, coordinatorIdentity: coordinator.identity() }); return;
         }
         if (message.type === 'subscribe') {
           ws.sessionId = message.id;
@@ -620,12 +655,12 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   try { watcher = watch(path.join(repo, 'workspace', 'workspace.json'), () => broadcast('workspace-changed', {})); watcher.on('error', () => {}); } catch { /* Registry may be created after first setup. */ }
   const restoreTimer = restoreSessions ? setTimeout(() => sessions.restore().catch(error => sessions.emit('service-error', error)), 100) : null;
   return {
-    origin, contentOrigin: files.origin, token, sessions, browserTabs, bobQuestions, handoffs, get coordinator() { return coordinator; }, quick, workspace, cards, files, projects, knowledge, integrations, mobile,
+    origin, contentOrigin: files.origin, token, sessions, assignments, browserTabs, bobQuestions, handoffs, get coordinator() { return coordinator; }, quick, workspace, cards, files, projects, knowledge, integrations, mobile,
     urls: { workspace: `${origin}/?desktop=1&surface=workspace&token=${token}`, chats: `${origin}/?desktop=1&surface=chats&token=${token}` },
       nativeMessage: event => nativeSettings.receive(event),
       async close() {
         if (closing) return; closing = true; mcp.close(); nativeSettings.close(); await files.writes.catch(() => {});
-      watcher?.close(); clearTimeout(restoreTimer); overseer.close(); coordinator.close(); clearTimeout(settingsTimer); await saveSettings(); await transcriptSave; await quick.saves; await workspace.writes;
+      watcher?.close(); clearTimeout(restoreTimer); overseer.close(); watchdog.close(); await assignments.release(); coordinator.close(); clearTimeout(settingsTimer); await saveSettings(); await transcriptSave; await quick.saves; await workspace.writes;
       dictation.close(); await mobile.close(); await games.close();
       for (const ws of wss.clients) ws.terminate();
       wss.close(); await sessions.close();

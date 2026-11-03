@@ -289,7 +289,7 @@ export class Sessions extends EventEmitter {
   watchNative(session, file, offset = 0) {
     if (!session.process) return;
     session.stopNativeWatch?.();
-    const stopTail = tailNativeFile(file, session.agent, event => this.nativeEvent(session, event), offset);
+    const stopTail = tailNativeFile(file, session.agent, event => { session.lastNativeAt = new Date().toISOString(); this.nativeEvent(session, event); }, offset);
     if (session.agent !== 'codex') { session.stopNativeWatch = stopTail; return; }
     // A Codex rewind continues the thread in a new rollout, and /new starts another
     // thread in the same terminal: follow the newest one this terminal owns.

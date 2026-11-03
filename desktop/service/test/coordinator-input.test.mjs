@@ -19,6 +19,7 @@ async function fixture() {
 test('coordinator receives image content and paths; retries never replay a completed operation', async () => {
   const { repo, service, request } = await fixture();
   try {
+    assert.equal((await request('/settings', { coordinatorAgent: 'codex' })).ok, true); // This test drives the Codex JSON-RPC path; the default coordinator is Claude Sonnet.
     const image = await new Attachments(repo).save(png, 'Reference.png');
     const turns = [];
     service.coordinator.start = async () => { service.coordinator.threadId = 'fixture'; };
