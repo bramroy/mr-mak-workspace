@@ -8,6 +8,7 @@ import { Sessions } from './sessions.mjs';
 import { BrowserTabs } from './browser-tabs.mjs';
 import { BobQuestions } from './bob-questions.mjs';
 import { Coordinator, openChatArguments } from './coordinator.mjs';
+import { Assignments } from './assignments.mjs';
 import { ClaudeCoordinator, CLAUDE_COORDINATOR_MODELS } from './coordinator-claude.mjs';
 import { Overseer } from './overseer.mjs';
 import { Files, serveFile } from './files.mjs';
@@ -146,9 +147,10 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
     sessions.input(id, attachmentText(verified, session.agent), { coordinator, submit: false });
     return { attached: verified, submitted: false };
   };
+  const assignments = await new Assignments({ stateDir }).init();
   // Talk to Mr. Mak runs on the coordinator the owner chose in Settings.
   const coordinatorOptions = {
-    repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: () => library.orientation(), settings: () => settings,
+    repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: async () => `${await library.orientation()}\n\n${assignments.orientation()}`, settings: () => settings,
     context: () => ({ repo, localDate: localDay(), overseerMode: !!settings.overseer, selectedId, workspaceRoute, chats: sessions.active(), recentNotices: notices.slice(-5), recentRequests: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-6).map(({ text, result, status }) => ({ text, result, status })) }),
     execute: async (name, args, operationId, requestText) => {
       const latestRequest = requestText || coordinator.operations.get(operationId)?.text || '';
@@ -193,6 +195,13 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'list_skills': return knowledge.skills(args.query || '');
         case 'list_mcp': return mcp.list();
         case 'ask_bob': return bobQuestions.create(args);
+        case 'list_assignments': return { dispatcher: assignments.dispatcherId, open: assignments.open() };
+        case 'assign_task': return assignments.assign(args);
+        case 'record_receipt': return assignments.receipt(args.id, args);
+        case 'record_verdict': return assignments.verdict(args.id, args);
+        case 'close_task': return assignments.close(args.id);
+        case 'handoff_task': return assignments.handoff(args.id, args.to);
+        case 'accept_task': return assignments.accept(args.id);
         case 'get_app_settings': return { voice: settings.voiceName, style: settings.voiceStyle, coordinator: coordinator.provider === 'claude' ? 'Claude Code' : 'Codex', model: coordinator.observedModel || coordinator.model || 'default', modelRequested: coordinator.model || null, modelObserved: coordinator.observedModel || null, effort: settings.coordinatorEffort, billing: `${coordinator.provider === 'claude' ? 'Claude' : 'Codex'} subscription for the coordinator; OpenAI API for voice` };
         case 'update_voice': {
           if (typeof args.style === 'string' && args.style.trim()) settings.voiceStyle = args.style.trim().slice(0, 1800);
