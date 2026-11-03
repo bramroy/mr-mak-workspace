@@ -20,7 +20,8 @@ export interface RecentProject { path: string; name: string; sources: ('workspac
 export interface Handoff { status: 'summarizing' | 'paused' | 'opening' | 'done' | 'failed'; pause?: boolean; error?: string | null; sessionId?: string | null; file?: string | null; at: string }
 export interface Notice { id: string; sessionId: string; name: string; kind: string; text: string; at: string }
 export interface Operation { id: string; text: string; status: string; result?: string; at: string; images?: string[] }
-export interface Settings { defaultAgent: AgentId; transcribeProvider?: 'local' | 'openai' | 'openrouter' | 'off'; defaultBypass: boolean; terminalFontSize?: number; terminalAppearance?: 'focus' | 'original'; workspaceTheme?: ThemePreference; chatTheme?: ThemePreference; workspaceRoute?: string | null; selectedId?: string | null; coordinatorEffort?: 'medium' | 'high'; coordinatorAgent?: 'codex' | 'claude'; overseer?: boolean; planTool?: boolean; effortAdvice?: 'off' | 'ask' | 'auto'; voiceName?: string; voiceStyle?: string; handoffAfter?: number; idleCacheMinutes?: number; idleCacheMinTokens?: number; usageLimitMode?: 'all' | 'general'; usageDirection?: 'used' | 'remaining'; terminalOptionMeta?: boolean; collapsedGroups?: string[]; groupColors?: Record<string, string>; systemEvents?: SystemEventsMode; agentPriority?: 'normal' | 'below-normal' | 'low' }
+export interface CoordinatorIdentity { provider: 'codex' | 'claude'; requested: string | null; observed: string | null; state: string }
+export interface Settings { defaultAgent: AgentId; transcribeProvider?: 'local' | 'openai' | 'openrouter' | 'off'; defaultBypass: boolean; terminalFontSize?: number; terminalAppearance?: 'focus' | 'original'; workspaceTheme?: ThemePreference; chatTheme?: ThemePreference; workspaceRoute?: string | null; selectedId?: string | null; coordinatorEffort?: 'medium' | 'high'; coordinatorAgent?: 'codex' | 'claude'; coordinatorModel?: 'sonnet' | 'opus' | 'haiku'; overseer?: boolean; planTool?: boolean; effortAdvice?: 'off' | 'ask' | 'auto'; voiceName?: string; voiceStyle?: string; handoffAfter?: number; idleCacheMinutes?: number; idleCacheMinTokens?: number; usageLimitMode?: 'all' | 'general'; usageDirection?: 'used' | 'remaining'; terminalOptionMeta?: boolean; collapsedGroups?: string[]; groupColors?: Record<string, string>; systemEvents?: SystemEventsMode; agentPriority?: 'normal' | 'below-normal' | 'low' }
 export type SystemEventsMode = 'full' | 'compact' | 'hidden'
 export interface ModelUsageTokens {
   current: number
@@ -67,7 +68,7 @@ export interface Preview { path: string; name: string; size: number; kind: 'docu
 export interface DesktopState {
   ready: boolean; connected: boolean; error: string | null; repo: string; contentBase: string
   agents: AgentInfo[]; sessions: ChatSession[]; selectedId: string | null; notices: Notice[]
-  settings: Settings; coordinator: string; voice: { configured: boolean; owner: VoiceOwner | null }
+  settings: Settings; coordinator: string; coordinatorIdentity?: CoordinatorIdentity | null; voice: { configured: boolean; owner: VoiceOwner | null }
   operations: Operation[]; preview: Preview | null
   voiceHistory: { id: string; at: string; captions: { role: 'user' | 'assistant'; text: string; start: number; end: number }[] }[]
 }
@@ -75,7 +76,7 @@ export interface ServiceEvent {
   type: string; id?: string; data?: string; sequence?: number; session?: ChatSession; sessions?: ChatSession[]
   selectedId?: string; sessionId?: string; state?: string; error?: string; notice?: Notice
   operation?: Operation; settings?: Settings; owner?: VoiceOwner | null; window?: string; route?: string; preview?: Preview; handoff?: Handoff | null
-  path?: string; status?: GameStatus
+  path?: string; status?: GameStatus; identity?: CoordinatorIdentity; coordinatorIdentity?: CoordinatorIdentity
 }
 
 export interface GameConfig { command: string; cwd?: string; url?: string }

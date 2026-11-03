@@ -11,6 +11,10 @@ const bridge = fileURLToPath(new URL('./coordinator-mcp.mjs', import.meta.url));
 const SERVER = 'mrmak';
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const EFFORTS = { medium: 'medium', high: 'high' };
+// Claude Code model aliases the owner may pick for the coordinator. Anything else is refused.
+export const CLAUDE_COORDINATOR_MODELS = ['sonnet', 'opus', 'haiku'];
+export const DEFAULT_CLAUDE_COORDINATOR_MODEL = 'sonnet';
+export const claudeCoordinatorModel = value => CLAUDE_COORDINATOR_MODELS.includes(value) ? value : DEFAULT_CLAUDE_COORDINATOR_MODEL;
 
 // The same Mr. Mak coordinator, answered by Claude Code on the owner's Claude
 // sign-in. Claude gets no built-in tools: only the coordinator tools, which a
@@ -23,6 +27,7 @@ export class ClaudeCoordinator extends Coordinator {
   send() { throw new Error('Claude coordinator has no JSON-RPC channel'); }
   async startInternal() {
     this.setState('connecting');
+    this.model = claudeCoordinatorModel(this.settings().coordinatorModel); this.observedModel = null;
     const command = claudeBinary();
     const mcp = { mcpServers: { [SERVER]: { type: 'stdio', command: process.execPath, args: [bridge], env: { MRMAK_COORDINATOR_URL: this.toolUrl(), MRMAK_COORDINATOR_SECRET: this.toolSecret } } } };
     const args = [
@@ -31,7 +36,7 @@ export class ClaudeCoordinator extends Coordinator {
       '--tools', '', '--strict-mcp-config', '--mcp-config', JSON.stringify(mcp),
       '--allowedTools', coordinatorTools.map(item => `mcp__${SERVER}__${item.name}`).join(','),
       '--setting-sources', '', '--no-session-persistence',
-      ...(this.model ? ['--model', this.model] : []),
+      '--model', this.model,
       ...(EFFORTS[this.settings().coordinatorEffort] ? ['--effort', EFFORTS[this.settings().coordinatorEffort]] : []),
     ];
     const child = spawn(command.file, [...command.args, ...args], { cwd: this.repo, env: childEnvironment(this.repo), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -49,6 +54,7 @@ export class ClaudeCoordinator extends Coordinator {
     this.setState('idle');
   }
   message(record) {
+    if (record.type === 'system' && record.subtype === 'init' && typeof record.model === 'string') { this.observedModel = record.model; this.emit('state', this.state); }
     if (!this.active) return;
     if (record.type === 'assistant') for (const part of record.message?.content || []) if (part.type === 'text') this.active.text = part.text;
     if (record.type === 'result') {

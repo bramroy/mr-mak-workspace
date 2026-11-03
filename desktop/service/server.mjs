@@ -8,7 +8,7 @@ import { Sessions } from './sessions.mjs';
 import { BrowserTabs } from './browser-tabs.mjs';
 import { BobQuestions } from './bob-questions.mjs';
 import { Coordinator, openChatArguments } from './coordinator.mjs';
-import { ClaudeCoordinator } from './coordinator-claude.mjs';
+import { ClaudeCoordinator, CLAUDE_COORDINATOR_MODELS } from './coordinator-claude.mjs';
 import { Overseer } from './overseer.mjs';
 import { Files, serveFile } from './files.mjs';
 import { importFile, dragFiles, moveFile, recyclePath, MAX_FILE_BYTES } from './file-transfers.mjs';
@@ -87,7 +87,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const environment = parseEnv(await readFile(path.join(repo, '.env'), 'utf8').catch(() => ''));
   const settingsPath = path.join(stateDir, 'settings.json');
   const savedSettings = await readJson(settingsPath, null);
-  let settings = { defaultAgent: 'codex', defaultBypass: false, coordinatorModel: environment.MRMAK_COORDINATOR_MODEL?.trim() || null, terminalFontSize: 13, terminalAppearance: 'original', workspaceTheme: 'dark', coordinatorEffort: 'medium', voiceName: 'cedar', voiceStyle: defaultVoiceStyle, handoffAfter: 40, idleCacheMinutes: IDLE_CACHE_MINUTES, idleCacheMinTokens: IDLE_CACHE_MIN_TOKENS, groupTabsByProject: false, projectOrder: [], usageLimitMode: 'all', usageDirection: 'used', systemEvents: 'compact', agentPriority: 'below-normal', ...savedSettings };
+  let settings = { defaultAgent: 'codex', defaultBypass: false, coordinatorAgent: 'claude', coordinatorModel: environment.MRMAK_COORDINATOR_MODEL?.trim() || 'sonnet', terminalFontSize: 13, terminalAppearance: 'original', workspaceTheme: 'dark', coordinatorEffort: 'medium', voiceName: 'cedar', voiceStyle: defaultVoiceStyle, handoffAfter: 40, idleCacheMinutes: IDLE_CACHE_MINUTES, idleCacheMinTokens: IDLE_CACHE_MIN_TOKENS, groupTabsByProject: false, projectOrder: [], usageLimitMode: 'all', usageDirection: 'used', systemEvents: 'compact', agentPriority: 'below-normal', ...savedSettings };
   sessions.priority = settings.agentPriority;
   const effortAdvisor = new EffortAdvisor({ sessions, stateDir, transcripts, mode: () => settings.effortAdvice || 'off' });
   if (settings.groupTabsByProject === true) {
@@ -193,7 +193,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'list_skills': return knowledge.skills(args.query || '');
         case 'list_mcp': return mcp.list();
         case 'ask_bob': return bobQuestions.create(args);
-        case 'get_app_settings': return { voice: settings.voiceName, style: settings.voiceStyle, coordinator: coordinator.provider === 'claude' ? 'Claude Code' : 'Codex', model: coordinator.model || 'default', effort: settings.coordinatorEffort, billing: `${coordinator.provider === 'claude' ? 'Claude' : 'Codex'} subscription for the coordinator; OpenAI API for voice` };
+        case 'get_app_settings': return { voice: settings.voiceName, style: settings.voiceStyle, coordinator: coordinator.provider === 'claude' ? 'Claude Code' : 'Codex', model: coordinator.observedModel || coordinator.model || 'default', modelRequested: coordinator.model || null, modelObserved: coordinator.observedModel || null, effort: settings.coordinatorEffort, billing: `${coordinator.provider === 'claude' ? 'Claude' : 'Codex'} subscription for the coordinator; OpenAI API for voice` };
         case 'update_voice': {
           if (typeof args.style === 'string' && args.style.trim()) settings.voiceStyle = args.style.trim().slice(0, 1800);
           if (['cedar', 'marin'].includes(args.voice)) settings.voiceName = args.voice;
@@ -208,7 +208,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const makeCoordinator = async (provider, previous) => {
     const next = new (coordinatorProviders[provider] || Coordinator)(coordinatorOptions);
     if (previous) { next.operations = previous.operations; previous.removeAllListeners(); previous.close(); } else await next.init();
-    next.on('state', state => broadcast('coordinator-state', { state }));
+    next.on('state', state => broadcast('coordinator-state', { state, identity: next.identity() }));
     next.on('result', operation => broadcast('coordinator-result', { operation }));
     next.on('error-detail', error => broadcast('service-error', { error }));
     return next;
@@ -294,7 +294,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'POST' && url.pathname === '/api/mobile/revoke') return json(response, 200, await mobile.revoke(data.id));
         if (method === 'GET' && url.pathname === '/api/bootstrap') {
           const keys = parseEnv(await readFile(path.join(repo, '.env'), 'utf8').catch(() => ''));
-          return json(response, 200, { browserTabs: browserTabs.state(), bobQuestions: bobQuestions.list(), repo, contentBase: `${files.origin}/view/${files.repoGrant}`, agents: inventory(), sessions: sessions.list(), settings, selectedId, notices, coordinator: coordinator.state, voice: { configured: !!(keys.OPENAI_API_KEY || keys.OPENAI_KEY || process.env.OPENAI_API_KEY), owner: voiceOwner }, voiceHistory, operations: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-30) });
+          return json(response, 200, { coordinatorIdentity: coordinator.identity(), browserTabs: browserTabs.state(), bobQuestions: bobQuestions.list(), repo, contentBase: `${files.origin}/view/${files.repoGrant}`, agents: inventory(), sessions: sessions.list(), settings, selectedId, notices, coordinator: coordinator.state, voice: { configured: !!(keys.OPENAI_API_KEY || keys.OPENAI_KEY || process.env.OPENAI_API_KEY), owner: voiceOwner }, voiceHistory, operations: [...coordinator.operations.values(), ...quick.operations.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-30) });
         }
         // Browser-backed chats never inherit terminal-agent permissions.
         if (url.pathname === '/api/bob-questions' && method === 'GET') return json(response, 200, { questions: bobQuestions.list() });
@@ -417,8 +417,14 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
           if (['medium', 'high'].includes(data.coordinatorEffort)) settings.coordinatorEffort = data.coordinatorEffort;
           if (['codex', 'claude'].includes(data.coordinatorAgent) && data.coordinatorAgent !== (settings.coordinatorAgent || 'codex')) {
             if (coordinator.state === 'working') throw Object.assign(new Error('Mr. Mak is answering a request. Change the coordinator when it finishes.'), { status: 409 });
-            settings.coordinatorAgent = data.coordinatorAgent; coordinator = await makeCoordinator(settings.coordinatorAgent, coordinator); broadcast('coordinator-state', { state: coordinator.state });
+            settings.coordinatorAgent = data.coordinatorAgent; coordinator = await makeCoordinator(settings.coordinatorAgent, coordinator); broadcast('coordinator-state', { state: coordinator.state, identity: coordinator.identity() });
           } else if (data.coordinatorEffort && coordinator.provider === 'claude' && coordinator.state !== 'working') coordinator.close(); // Claude takes its effort when it starts.
+          if (data.coordinatorModel !== undefined) {
+            if (!CLAUDE_COORDINATOR_MODELS.includes(data.coordinatorModel)) throw Object.assign(new Error(`Choose a coordinator model: ${CLAUDE_COORDINATOR_MODELS.join(', ')}.`), { status: 400 });
+            if (coordinator.state === 'working') throw Object.assign(new Error('Mr. Mak is answering a request. Change the model when it finishes.'), { status: 409 });
+            settings.coordinatorModel = data.coordinatorModel;
+            if (coordinator.provider === 'claude') { coordinator.close(); broadcast('coordinator-state', { state: coordinator.state, identity: coordinator.identity() }); } // Claude takes its model when it starts.
+          }
           if (typeof data.overseer === 'boolean') { settings.overseer = data.overseer; overseer.update(); }
           if (typeof data.planTool === 'boolean') settings.planTool = data.planTool;
           if (EFFORT_ADVICE.includes(data.effortAdvice)) settings.effortAdvice = data.effortAdvice;
@@ -599,7 +605,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (!ws.authenticated) {
           if (message.type !== 'auth' || !equalSecret(message.token, token)) return ws.close(1008, 'Authentication failed');
           ws.authenticated = true; ws.clientId = message.clientId; ws.surface = message.surface; clients.add(ws); clearTimeout(authTimer);
-          send(ws, 'connected', { sessions: sessions.list(), selectedId, coordinator: coordinator.state }); return;
+          send(ws, 'connected', { sessions: sessions.list(), selectedId, coordinator: coordinator.state, coordinatorIdentity: coordinator.identity() }); return;
         }
         if (message.type === 'subscribe') {
           ws.sessionId = message.id;

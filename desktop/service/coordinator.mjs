@@ -67,7 +67,7 @@ export { instructions as coordinatorInstructions };
 export class Coordinator extends EventEmitter {
   constructor({ repo, stateDir, execute, context, orientation = async () => '', settings = () => ({}) }) {
     super(); Object.assign(this, { repo, stateDir, execute, context, orientation, settings });
-    this.provider = 'codex'; this.model = settings().coordinatorModel || null;
+    this.provider = 'codex'; this.model = settings().coordinatorModel || null; this.observedModel = null;
     this.pending = new Map(); this.nextId = 1; this.child = null; this.threadId = null;
     this.queue = Promise.resolve(); this.operations = new Map(); this.operationPromises = new Map();
     this.state = 'idle'; this.active = null; this.startPromise = null;
@@ -78,6 +78,9 @@ export class Coordinator extends EventEmitter {
     return this;
   }
   setState(value) { this.state = value; this.emit('state', value); }
+  // What the owner can verify: the provider, the model that was asked for and, once the process has
+  // reported it, the model that is actually answering. A label is never the identity.
+  identity() { return { provider: this.provider, requested: this.model || null, observed: this.observedModel || null, state: this.state }; }
   send(value) { if (!this.child?.stdin.writable) throw new Error('Codex coordinator is disconnected'); this.child.stdin.write(JSON.stringify(value) + '\n'); }
   rpc(method, params, timeout = 35000) {
     const id = this.nextId++;
