@@ -132,6 +132,40 @@ export async function processTrees(pids) {
   });
 }
 
+// CPU time (ms) used so far by a process and everything it started. A worker that is compiling, testing or reading
+// files is busy while its terminal is silent; an idle prompt uses none. null means this platform could not tell.
+export function parseCpuTime(text) {
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(String(text).trim());
+  if (!match) return null;
+  const [, days = 0, hours = 0, minutes, seconds] = match;
+  return Math.round((((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000);
+}
+export function treeCpuFromRows(rows, root) {
+  const children = new Map(), cpu = new Map();
+  for (const { pid, ppid, ms } of rows) { cpu.set(pid, ms); children.set(ppid, [...children.get(ppid) || [], pid]); }
+  if (!cpu.has(root)) return null;
+  const seen = new Set([root]);
+  for (const pid of seen) for (const child of children.get(pid) || []) if (child !== process.pid) seen.add(child);
+  let total = 0;
+  for (const pid of seen) total += cpu.get(pid) || 0;
+  return total;
+}
+export async function processTreeCpuMs(pid) {
+  try {
+    const command = isWindows
+      ? ['powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, [math]::Round(([double]$_.KernelModeTime + [double]$_.UserModeTime) / 10000) }"]]
+      : ['ps', ['-A', '-o', 'pid=,ppid=,time=']];
+    const stdout = await new Promise((resolve, reject) => execFile(command[0], command[1], { ...processSpawnOptions(), timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (error, output) => error ? reject(error) : resolve(String(output))));
+    const rows = [];
+    for (const line of stdout.split('\n')) {
+      const [a, b, c] = line.trim().split(/\s+/);
+      const ms = isWindows ? Number(c) : parseCpuTime(c);
+      if (Number(a) > 0 && Number(b) >= 0 && Number.isFinite(ms) && ms !== null) rows.push({ pid: Number(a), ppid: Number(b), ms });
+    }
+    return treeCpuFromRows(rows, pid);
+  } catch { return null; }
+}
+
 // CPU priority for agent terminals. Windows hands a below-normal or idle class
 // down to every process started afterwards, and nice values are always inherited,
 // so the CLI's tools and MCP servers follow the terminal.

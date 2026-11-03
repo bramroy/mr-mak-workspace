@@ -16,31 +16,35 @@ test('through the real coordinator tools: assign, receipt, refused close, indepe
   const repo = await repoWithWorkspace(), stateDir = path.join(repo, '.mrmak');
   const names = coordinatorTools.map(item => item.name);
   for (const name of ['assign_task', 'record_receipt', 'record_verdict', 'close_task', 'handoff_task', 'accept_task', 'list_assignments']) assert.ok(names.includes(name), name);
-  let service = await createService({ repo, uiDir: repo, stateDir, mcpOptions: { home: repo, env: {} } });
+  const verifyChecks = async ({ sha }) => [{ name: 'quoin_eave', result: sha === 'deadbee2' ? 'PASS' : 'NOT RUN' }]; // Stands in for GitHub's check runs.
+  let service = await createService({ repo, uiDir: repo, stateDir, verifyChecks, mcpOptions: { home: repo, env: {} } });
   let dispatcher;
   try {
     const run = (name, args) => service.coordinator.execute(name, args, 'op-' + name, 'test');
-    await run('assign_task', { id: 'quoins', title: 'Quoins meet the soffit', intent: 'the soffit is the reference', owner: 'chat-implementer', repo: 'ZoddWorldTools' });
+    await run('assign_task', { id: 'quoins', title: 'Quoins meet the soffit', intent: 'the soffit is the reference', taskText: 'Make quoins meet the soffit.', owner: 'chat-implementer', repo: 'bramroy/ZoddWorldTools', proof: true });
     await run('record_receipt', { id: 'quoins', sha: 'deadbee1', checks: [{ name: 'quoin_eave', result: 'NOT RUN' }], negativeSeenFailing: true });
-    await assert.rejects(run('close_task', { id: 'quoins' }), /NOT RUN is not a pass/);
+    await assert.rejects(run('close_task', { id: 'quoins' }), /FAIL or NOT RUN on GitHub/);
+    await run('record_receipt', { id: 'quoins', sha: 'deadbee2', checks: [{ name: 'quoin_eave', result: 'PASS' }], negativeSeenFailing: true });
+    const claimed = await run('record_receipt', { id: 'quoins', sha: 'deadbee1', checks: [{ name: 'quoin_eave', result: 'PASS' }], negativeSeenFailing: true }); // The model says PASS; GitHub says NOT RUN.
+    assert.equal(claimed.checks[0].result, 'NOT RUN');
     await run('record_receipt', { id: 'quoins', sha: 'deadbee2', checks: [{ name: 'quoin_eave', result: 'PASS' }], negativeSeenFailing: true });
     await assert.rejects(run('record_verdict', { id: 'quoins', verifier: 'chat-implementer', sha: 'deadbee2', result: 'PASS' }), /cannot give its verdict/);
     await assert.rejects(run('close_task', { id: 'quoins' }), /independent verdict/);
     dispatcher = (await run('list_assignments', {})).dispatcher;
   } finally { await service.close(); }
-  service = await createService({ repo, uiDir: repo, stateDir, mcpOptions: { home: repo, env: {} } });
+  service = await createService({ repo, uiDir: repo, stateDir, verifyChecks, mcpOptions: { home: repo, env: {} } });
   try {
     const run = (name, args) => service.coordinator.execute(name, args, 'op2-' + name, 'test');
     const listed = await run('list_assignments', {});
     assert.equal(listed.dispatcher, dispatcher, 'the same dispatcher after a restart');
-    assert.equal(listed.open[0].receipts.length, 2);
+    assert.equal(listed.open[0].receipts.length, 4);
     await run('record_verdict', { id: 'quoins', verifier: 'chat-reviewer', sha: 'deadbee2', result: 'PASS' });
     assert.equal((await run('close_task', { id: 'quoins' })).status, 'closed');
     assert.deepEqual((await run('list_assignments', {})).open, []);
   } finally { await service.close(); }
 });
 
-test('send_to_chat on the owning chat records the task text the stall watch re-sends', async () => {
+test('send_to_chat on the owning chat starts the stall clock and never replaces the saved task', async () => {
   const repo = await repoWithWorkspace(), stateDir = path.join(repo, '.mrmak');
   process.env.MRMAK_NO_WATCHDOG = '1';
   const bin = await mkdtemp(path.join(os.tmpdir(), 'mrmak-fake-agent-')), previousPath = process.env.PATH;
@@ -50,11 +54,14 @@ test('send_to_chat on the owning chat records the task text the stall watch re-s
   try {
     const session = await service.sessions.create({ agent: 'claude', cwd: repo, name: 'Quoin Work', bypass: false });
     const run = (name, args) => service.coordinator.execute(name, args, 'op-' + name, 'test');
-    await run('assign_task', { id: 'q', title: 'Quoins', intent: 'the soffit is the reference', owner: session.id });
+    await run('assign_task', { id: 'q', title: 'Quoins', intent: 'the soffit is the reference', taskText: 'Make every quoin stack meet the soffit line.', owner: session.id, proof: true });
     assert.equal(service.coordinator.execute && (await run('list_assignments', {})).open[0].dispatch, undefined, 'nothing is re-sendable before the task is sent');
     await run('send_to_chat', { id: session.id, text: 'Make every quoin stack meet the soffit line.' });
     const task = (await run('list_assignments', {})).open[0];
-    assert.equal(task.dispatch.text, 'Make every quoin stack meet the soffit line.'); assert.equal(task.dispatch.redispatches, 0);
+    assert.equal(task.taskText, 'Make every quoin stack meet the soffit line.'); assert.equal(task.dispatch.redispatches, 0); assert.equal(task.dispatch.followups, 0);
+    await run('send_to_chat', { id: session.id, text: 'thanks, carry on' });
+    const after = (await run('list_assignments', {})).open[0];
+    assert.equal(after.taskText, 'Make every quoin stack meet the soffit line.', 'a follow-up never replaces the saved task'); assert.equal(after.dispatch.followups, 1);
     // Negative: a message to a chat that owns no assignment records nothing.
     const other = await service.sessions.create({ agent: 'claude', cwd: repo, name: 'Other Work', bypass: false });
     await run('send_to_chat', { id: other.id, text: 'unrelated' });
