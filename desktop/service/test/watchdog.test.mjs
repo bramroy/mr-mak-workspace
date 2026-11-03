@@ -10,8 +10,8 @@ const MIN = 60_000, T0 = Date.parse('2026-11-03T10:00:00Z');
 const iso = ms => new Date(ms).toISOString();
 const chat = (extra = {}) => ({ id: 'chat-1', agent: 'claude', status: 'running', activity: 'idle', attention: false, lastOutputAt: iso(T0), ...extra });
 const fixture = async () => {
-  const a = await new Assignments({ stateDir: await mkdtemp(path.join(os.tmpdir(), 'mrmak-watch-')) }).init();
-  await a.assign({ id: 't1', title: 'Quoins meet the soffit', intent: 'the soffit is the reference', taskText: 'Make every quoin stack meet the soffit line on every roof type.', owner: 'chat-1', proof: true });
+  const a = await new Assignments({ stateDir: await mkdtemp(path.join(os.tmpdir(), 'mrmak-watch-')), openGates: true }).init();
+  await a.assign({ id: 't1', title: 'Quoins meet the soffit', intent: 'the soffit is the reference', taskText: 'Make every quoin stack meet the soffit line on every roof type.', owner: 'chat-1', repo: 'bramroy/ZoddWorldTools', suites: ['tests'] });
   await a.markDispatched('chat-1', T0);
   return a;
 };

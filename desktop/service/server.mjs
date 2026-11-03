@@ -10,7 +10,7 @@ import { BrowserTabs } from './browser-tabs.mjs';
 import { BobQuestions } from './bob-questions.mjs';
 import { Coordinator, openChatArguments } from './coordinator.mjs';
 import { processTreeCpuMs } from './platform.mjs';
-import { Assignments, githubChecks } from './assignments.mjs';
+import { Assignments, githubChecks, WORKER_KINDS } from './assignments.mjs';
 import { DispatchWatchdog } from './watchdog.mjs';
 import { ClaudeCoordinator, CLAUDE_COORDINATOR_MODELS } from './coordinator-claude.mjs';
 import { Overseer } from './overseer.mjs';
@@ -153,6 +153,8 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   const githubToken = () => environment.GITHUB_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim() || '';
   const assignments = await new Assignments({ stateDir, verify: verifyChecks || (({ repo, sha }) => githubChecks({ repo, sha, token: githubToken() })) }).init();
   assignments.onChange = () => broadcast('assignments', {});
+  // The worker's kind comes from the chat itself, never from what the model says it is.
+  const workerKindOf = owner => { const session = (() => { try { return sessions.get(String(owner)); } catch { return null; } })(); if (session) return session.agent; if (browserTabs.state().tabs?.some?.(tab => tab.id === owner)) return 'bob'; const named = String(owner || '').trim().toLowerCase(); return WORKER_KINDS.includes(named) ? named : 'person'; };
   // Talk to Mr. Mak runs on the coordinator the owner chose in Settings.
   const coordinatorOptions = {
     repo, stateDir, toolUrl: () => `${origin}/coordinator/tool`, orientation: async () => `${await library.orientation()}\n\n${assignments.orientation(coordinator?.identity())}`, settings: () => settings,
@@ -201,7 +203,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         case 'list_mcp': return mcp.list();
         case 'ask_bob': return bobQuestions.create(args);
         case 'list_assignments': return { dispatcher: assignments.dispatcherId, open: assignments.open() };
-        case 'assign_task': return assignments.assign(args, { identity: coordinator.identity() });
+        case 'assign_task': return assignments.assign(args, { identity: coordinator.identity(), workerKind: workerKindOf(args.owner) });
         case 'record_receipt': return assignments.receipt(args.id, args);
         case 'record_verdict': return assignments.verdict(args.id, args);
         case 'close_task': return assignments.close(args.id);
@@ -350,6 +352,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
         if (method === 'POST' && url.pathname === '/api/integrations/bind') return json(response, 200, await integrations.bind(data));
         if (method === 'GET' && url.pathname === '/api/native/settings') return json(response, 200, nativeSettings.value);
         if (method === 'GET' && url.pathname === '/api/coordinator/assignments') return json(response, 200, assignments.snapshot(coordinator.identity()));
+        if (method === 'POST' && url.pathname === '/api/coordinator/proof') return json(response, 201, await assignments.startProof({ owner: data.owner, repo: data.repo, suites: data.suites }, { workerKind: workerKindOf(data.owner) }));
         if (method === 'POST' && url.pathname === '/api/coordinator/cutover') return json(response, 200, await assignments.approveCutover('owner', coordinator.identity()));
         if (method === 'GET' && url.pathname === '/api/mcp') { const value = await mcp.list(); return json(response, 200, { ...value, engines: await engineStatus(value.servers) }); }
         if (method === 'POST' && url.pathname === '/api/skills/discover') return json(response, 200, await discoverSkills(await projectFolder(data.path)));
@@ -644,7 +647,7 @@ export async function createService({ repo, uiDir, stateDir, token = secret(), n
   try { watcher = watch(path.join(repo, 'workspace', 'workspace.json'), () => broadcast('workspace-changed', {})); watcher.on('error', () => {}); } catch { /* Registry may be created after first setup. */ }
   const restoreTimer = restoreSessions ? setTimeout(() => sessions.restore().catch(error => sessions.emit('service-error', error)), 100) : null;
   return {
-    origin, contentOrigin: files.origin, token, sessions, browserTabs, bobQuestions, handoffs, get coordinator() { return coordinator; }, quick, workspace, cards, files, projects, knowledge, integrations, mobile,
+    origin, contentOrigin: files.origin, token, sessions, assignments, browserTabs, bobQuestions, handoffs, get coordinator() { return coordinator; }, quick, workspace, cards, files, projects, knowledge, integrations, mobile,
     urls: { workspace: `${origin}/?desktop=1&surface=workspace&token=${token}`, chats: `${origin}/?desktop=1&surface=chats&token=${token}` },
       nativeMessage: event => nativeSettings.receive(event),
       async close() {

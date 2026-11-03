@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { Assignments, normalizeResult, githubChecks, checkResult } from '../assignments.mjs';
+import { Assignments, normalizeResult, githubChecks, checkResult, executedTests, applyEvidence, normalizeSuites } from '../assignments.mjs';
 
 const dir = () => mkdtemp(path.join(os.tmpdir(), 'mrmak-assign-'));
 const READY = { provider: 'claude', requested: 'sonnet', observed: 'claude-sonnet-5-5' };
-const github = (result = 'PASS', name = 'quoin_eave_test') => async () => [{ name, result }];
-const make = async (extra = {}) => { const a = await new Assignments({ stateDir: await dir(), verify: github(), ...extra }).init(); return a; };
-const task = { id: 't1', title: 'Quoins meet the soffit', intent: '"the soffit is the reference"', taskText: 'Make every quoin stack meet the soffit line.', repo: 'bramroy/ZoddWorldTools', branch: 'fix/quoins', baseSha: 'abc1234', owner: 'chat-implementer', proof: true };
+const github = (result = 'PASS', name = 'quoin_eave_test', executed = 12) => async () => [{ name, result, executed }];
+const make = async (extra = {}) => { const a = await new Assignments({ stateDir: await dir(), verify: github(), openGates: true, ...extra }).init(); return a; };
+const task = { id: 't1', title: 'Quoins meet the soffit', intent: '"the soffit is the reference"', taskText: 'Make every quoin stack meet the soffit line.', repo: 'bramroy/ZoddWorldTools', branch: 'fix/quoins', baseSha: 'abc1234', owner: 'chat-implementer', suites: ['quoin_eave_test'] };
 const passing = { sha: 'deadbee1', checks: [{ name: 'quoin_eave_test', result: 'PASS' }], negativeSeenFailing: true };
 
 test('a task closes only with a GitHub-verified PASS receipt, a failing negative seen, and an independent PASS verdict on the same commit', async () => {
@@ -44,7 +44,6 @@ test('negative: with no GitHub verifier, an unreachable GitHub or no repository,
   for (const [options, taskOverride, message] of [
     [{ verify: null }, {}, /not verified against GitHub/],
     [{ verify: async () => { throw new Error('GitHub did not return the checks (HTTP 401).'); } }, {}, /HTTP 401/],
-    [{}, { repo: null }, /no repository/],
   ]) {
     const a = await make(options);
     await a.assign({ ...task, ...taskOverride });
@@ -91,7 +90,7 @@ test('an assignment needs the owner\'s words, the original task text, one owner,
 
 test('one dispatcher per state folder: a second process is read only until the first releases, and a dead holder is taken over', async () => {
   const stateDir = await dir();
-  const first = await new Assignments({ stateDir, pid: process.pid }).init();
+  const first = await new Assignments({ stateDir, pid: process.pid, openGates: true }).init();
   assert.equal(first.readOnly, null);
   await first.assign(task);
   const second = await new Assignments({ stateDir, pid: 424242 }).init(); // Same folder, a different live process.
@@ -109,14 +108,15 @@ test('one dispatcher per state folder: a second process is read only until the f
   assert.equal(fourth.readOnly, null, 'a lock whose process is gone is stale and is taken over');
 });
 
-test('cutover from the old dispatcher: real work is refused until Sonnet is observed, a proof task closed, and the owner approved', async () => {
-  const a = await make();
-  const real = { ...task, id: 'real', proof: false };
+const proofArgs = { id: 'p1', owner: 'chat-implementer', repo: 'bramroy/ZoddWorldTools', suites: ['quoin_eave_test'] };
+test('cutover from the old dispatcher: real work is refused until Sonnet is observed, an owner-started proof closed, and the owner approved', async () => {
+  const a = await make({ openGates: false });
+  const real = { ...task, id: 'real' };
   await assert.rejects(a.assign(real, { identity: READY }), /cutover gates.*proof, owner/);
   await assert.rejects(a.assign(real, { identity: { provider: 'claude', requested: 'sonnet', observed: null } }), /cutover gates.*model/);
-  await a.assign(task, { identity: null }); // A proof task is always allowed.
+  await a.startProof(proofArgs); // The owner's act: always allowed.
   await assert.rejects(a.approveCutover('Brandon', READY), /proof task has been closed|no proof task/);
-  await a.receipt('t1', passing); await a.verdict('t1', { verifier: 'chat-reviewer', sha: 'deadbee1', result: 'PASS' }); await a.close('t1');
+  await a.receipt('p1', passing); await a.verdict('p1', { verifier: 'chat-reviewer', sha: 'deadbee1', result: 'PASS' }); await a.close('p1');
   await assert.rejects(a.approveCutover('Brandon', { provider: 'claude', requested: 'sonnet', observed: 'claude-opus-5-5' }), /reports claude-opus-5-5/);
   await assert.rejects(a.assign(real, { identity: READY }), /cutover gates.*owner/, 'still refused until the owner approves');
   await a.approveCutover('Brandon', READY);
@@ -124,10 +124,72 @@ test('cutover from the old dispatcher: real work is refused until Sonnet is obse
   await assert.rejects(a.assign({ ...real, id: 'real2' }, { identity: { provider: 'codex', requested: null, observed: 'gpt' } }), /cutover gates.*model/, 'the gate re-checks the live model every time');
 });
 
+test('negative: the coordinator cannot label its own work as proof; only the owner-started task with fixed text opens the gate', async () => {
+  const a = await make({ openGates: false });
+  await assert.rejects(a.assign({ ...task, proof: true }, { identity: READY }), /owner from the Coordinator panel, never by the coordinator/);
+  await assert.rejects(a.assign({ ...task, proof: 'yes' }), /never by the coordinator/);
+  const started = await a.startProof(proofArgs);
+  assert.equal(started.proof, true);
+  assert.match(started.taskText, /disposable cutover proof/, 'the text is fixed by the app, not by the model');
+  assert.equal(started.intent, 'Prove the coordinator can dispatch, verify and close one disposable task before real work moves to it.');
+  await assert.rejects(a.startProof({ ...proofArgs, id: 'p2', repo: 'nonsense' }), /owner\/name/);
+  assert.equal((await make({ openGates: false })).gates(READY).find(gate => gate.name === 'proof').ok, false, 'an assigned task that only claims proof leaves the gate shut');
+});
+
+test('negative: a Codex or Bob worker needs its own closed proof before real work goes to it, then closes on the same evidence', async () => {
+  const a = await make({ openGates: false });
+  await a.startProof({ ...proofArgs, id: 'pc' }, { workerKind: 'claude' });
+  await a.receipt('pc', passing); await a.verdict('pc', { verifier: 'chat-reviewer', sha: 'deadbee1', result: 'PASS' }); await a.close('pc');
+  await a.approveCutover('Brandon', READY);
+  assert.equal((await a.assign({ ...task, id: 'cl' }, { identity: READY, workerKind: 'claude' })).workerKind, 'claude');
+  for (const kind of ['codex', 'bob']) {
+    await assert.rejects(a.assign({ ...task, id: `x-${kind}` }, { identity: READY, workerKind: kind }), new RegExp(`cutover gates.*worker`), `no ${kind} proof yet`);
+    assert.match(a.gates(READY, kind).find(gate => gate.name === 'worker').detail, new RegExp(`no ${kind} worker has closed`));
+  }
+  await a.startProof({ ...proofArgs, id: 'px' }, { workerKind: 'codex' });
+  await a.receipt('px', passing); await a.verdict('px', { verifier: 'chat-reviewer', sha: 'deadbee1', result: 'PASS' });
+  await assert.rejects(a.assign({ ...task, id: 'cx0' }, { identity: READY, workerKind: 'codex' }), /worker/, 'an open proof is not a closed one');
+  await a.close('px');
+  const codex = await a.assign({ ...task, id: 'cx' }, { identity: READY, workerKind: 'codex' });
+  assert.equal(codex.workerKind, 'codex');
+  await assert.rejects(a.assign({ ...task, id: 'bb' }, { identity: READY, workerKind: 'bob' }), /worker/, 'Codex proof does not open the Bob gate');
+  // The Codex task closes only on the same evidence as everyone else's.
+  await a.receipt('cx', { ...passing, negativeSeenFailing: false }); await a.verdict('cx', { verifier: 'chat-reviewer', sha: 'deadbee1', result: 'PASS' });
+  await assert.rejects(a.close('cx'), /no negative case/);
+});
+
+test('negative: a green check run with no test count, zero tests, or a missing suite is NOT RUN and cannot close', async () => {
+  assert.equal(executedTests({ output: { summary: '# tests 330\n# pass 320\n# fail 2\n# skipped 8' } }), 320);
+  assert.equal(executedTests({ output: { title: '42 passed, 1 skipped' } }), 42);
+  assert.equal(executedTests({ output: { summary: '0 passed, 8 skipped' } }), 0);
+  assert.equal(executedTests({ output: { summary: 'All good' } }), null);
+  assert.equal(executedTests({}), null);
+  const suites = normalizeSuites(['vendor tests', { name: 'service tests', min: 300 }]);
+  const checks = [{ name: 'vendor tests', result: 'PASS', executed: 5 }, { name: 'service tests', result: 'PASS', executed: 12 }, { name: 'lint', result: 'PASS', executed: null }];
+  const applied = applyEvidence(suites, checks);
+  assert.equal(applied[0].result, 'PASS'); assert.equal(applied[1].result, 'NOT RUN'); assert.match(applied[1].evidence, /only 12/); assert.equal(applied[2].result, 'PASS', 'a check outside the suites is not held to a count');
+  assert.equal(applyEvidence(normalizeSuites(['vendor tests']), [{ name: 'vendor tests', result: 'PASS', executed: null }])[0].result, 'NOT RUN');
+  assert.equal(applyEvidence(normalizeSuites(['vendor tests']), [{ name: 'vendor tests', result: 'PASS', executed: 0 }])[0].result, 'NOT RUN');
+  assert.deepEqual(applyEvidence(normalizeSuites(['vendor tests']), []).map(check => [check.name, check.result]), [['vendor tests', 'NOT RUN']]);
+  assert.throws(() => normalizeSuites([]), /Name the check runs/); assert.throws(() => normalizeSuites(['']), /check name/); assert.throws(() => normalizeSuites([{ name: 'x', min: 0 }]), /whole number/);
+  for (const [verify, label] of [[github('PASS', 'quoin_eave_test', null), 'no count'], [github('PASS', 'quoin_eave_test', 0), 'zero tests'], [github('PASS', 'another_check', 9), 'suite missing']]) {
+    const a = await make({ verify });
+    await a.assign(task);
+    const receipt = await a.receipt('t1', passing);
+    assert.ok(receipt.checks.find(check => check.name === 'quoin_eave_test').result === 'NOT RUN', label);
+    assert.ok(receipt.disagreements.length >= 1, `${label}: the model claimed PASS`);
+    await a.verdict('t1', { verifier: 'chat-reviewer', sha: 'deadbee1', result: 'PASS' });
+    await assert.rejects(a.close('t1'), /NOT RUN is not a pass|FAIL or NOT RUN/, label);
+  }
+  const a = await make();
+  await assert.rejects(a.assign({ ...task, suites: undefined }), /Name the check runs/, 'real work must name its suites');
+  await assert.rejects(a.assign({ ...task, repo: null }), /Name the repository/);
+});
+
 test('one dispatcher per task: another dispatcher cannot act, and a hand-over needs acceptance', async () => {
   const first = await make({ dispatcherId: 'dispatcher-a' });
   await first.assign(task);
-  const second = await new Assignments({ stateDir: await dir(), dispatcherId: 'dispatcher-b', verify: github() }).init();
+  const second = await new Assignments({ stateDir: await dir(), dispatcherId: 'dispatcher-b', verify: github(), openGates: true }).init();
   second.tasks = new Map(JSON.parse(JSON.stringify([...first.tasks])));
   await assert.rejects(second.receipt('t1', passing), /Another dispatcher \(dispatcher-a\) holds this task/);
   await assert.rejects(second.assign(task), /Another dispatcher/);
@@ -142,11 +204,11 @@ test('one dispatcher per task: another dispatcher cannot act, and a hand-over ne
 
 test('charter, dispatcher identity, original task text and open assignments survive a restart', async () => {
   const stateDir = await dir();
-  const before = await new Assignments({ stateDir, verify: github() }).init();
+  const before = await new Assignments({ stateDir, verify: github(), openGates: true }).init();
   await before.assign(task); await before.receipt('t1', passing); await before.release();
   const after = await new Assignments({ stateDir }).init();
   assert.equal(after.dispatcherId, before.dispatcherId);
   assert.equal(after.get('t1').receipts.length, 1); assert.equal(after.get('t1').taskText, task.taskText);
   const text = after.orientation(READY);
-  assert.ok(text.includes(before.dispatcherId) && text.includes('(you)') && text.includes('the soffit is the reference') && text.includes('Coordinator charter') && text.includes('Cutover gates') && text.includes('NOT YET proof'));
+  assert.ok(text.includes(before.dispatcherId) && text.includes('(you)') && text.includes('the soffit is the reference') && text.includes('Coordinator charter') && text.includes('Cutover gates') && text.includes('NOT YET'));
 });

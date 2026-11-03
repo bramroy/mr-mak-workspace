@@ -17,7 +17,7 @@ test('a real second process on the same state folder cannot dispatch while the f
   assert.equal(first, 'holder');
   const second = await new Assignments({ stateDir }).init();
   assert.match(second.readOnly, new RegExp(`pid ${child.pid}`));
-  await assert.rejects(second.assign({ title: 't', intent: 'i', taskText: 'x', owner: 'o', proof: true }), /Read only/);
+  await assert.rejects(second.assign({ title: 't', intent: 'i', taskText: 'x', owner: 'o', repo: 'a/b', suites: ['tests'] }), /Read only/);
   const exited = new Promise(resolve => child.once('exit', resolve)); child.stdin.end(); await exited;
   const third = await new Assignments({ stateDir }).init();
   assert.equal(third.readOnly, null, 'the lock is released when its holder exits');

@@ -27,8 +27,47 @@ export async function githubChecks({ repo, sha, token, fetchImpl = fetch }) {
   const data = await response.json();
   const runs = Array.isArray(data.check_runs) ? data.check_runs : [];
   if (!runs.length) throw new Error(`GitHub has no check runs for ${repo}@${String(sha).slice(0, 8)}. No checks is not a pass.`);
-  return runs.map(run => ({ name: String(run.name), result: checkResult(run), url: run.html_url || null }));
+  return runs.map(run => ({ name: String(run.name), result: checkResult(run), executed: executedTests(run), url: run.html_url || null }));
 }
+
+// A green check run only says the job exited cleanly. It does not say the tests ran: a job that skips its suite is green too.
+// The evidence is the passed-test count the run itself reports (node:test "# pass N", "N passed", "N passing"). No count is no evidence.
+export const executedTests = run => {
+  const out = run.output || {};
+  const text = [out.title, out.summary, out.text].filter(Boolean).join('\n');
+  const found = [];
+  for (const pattern of [/#\s*pass\s+(\d+)/gi, /(\d+)\s+(?:tests?\s+)?(?:passed|passing)\b/gi, /\bpass(?:ed)?[:=]\s*(\d+)/gi]) for (const match of text.matchAll(pattern)) found.push(Number(match[1]));
+  return found.length ? Math.max(...found) : null;
+};
+// A task names the suites that must have run: a check name, or { name, min } for a floor on the passed-test count.
+export const normalizeSuites = list => {
+  if (!Array.isArray(list) || !list.length) throw new Error('Name the check runs that must show their tests executed (suites), such as the vendor and service test jobs.');
+  return list.map(item => {
+    const name = String(typeof item === 'string' ? item : item?.name || '').trim(), min = typeof item === 'object' && item?.min != null ? Number(item.min) : 1;
+    if (!name) throw new Error('Every suite needs a check name.');
+    if (!Number.isInteger(min) || min < 1) throw new Error('A suite floor is a whole number of at least 1.');
+    return { name, min };
+  });
+};
+// A suite counts as PASS only if GitHub says it passed AND it reports at least its floor of passed tests. Missing, or silent about its count, is NOT RUN.
+export const applyEvidence = (suites, checks) => {
+  const out = checks.map(check => ({ ...check }));
+  for (const suite of suites) {
+    const check = out.find(item => item.name === suite.name);
+    if (!check) { out.push({ name: suite.name, result: 'NOT RUN', executed: null, missing: true, evidence: 'GitHub has no check run with this name.' }); continue; }
+    if (check.result !== 'PASS') continue;
+    if (!Number.isInteger(check.executed)) { check.result = 'NOT RUN'; check.evidence = 'Green, but the run reports no test count, so it is not evidence the tests ran.'; }
+    else if (check.executed < suite.min) { check.result = 'NOT RUN'; check.evidence = `Green, but only ${check.executed} test(s) passed; ${suite.min} are required.`; }
+  }
+  return out;
+};
+export const WORKER_KINDS = ['claude', 'codex', 'opencode', 'bob'];
+// The cutover proof is fixed text the owner starts. The coordinator model cannot make its own task a proof.
+export const proofSpec = ({ id, repo }) => ({
+  title: 'Cutover proof',
+  intent: 'Prove the coordinator can dispatch, verify and close one disposable task before real work moves to it.',
+  taskText: `This is the disposable cutover proof. On a throwaway branch of ${repo}, add one small file named proof/${id}.txt, run the repository's own tests, and report the exact commit. Change nothing else.`,
+});
 
 export const DEFAULT_CHARTER = `# Mr. Mak coordinator charter
 
@@ -47,8 +86,8 @@ const conflict = message => Object.assign(new Error(message), { status: 409 });
 
 export class Assignments {
   // verify: async ({ repo, sha }) => [{ name, result }] from GitHub. Without it, receipts stay unverified and cannot close a task.
-  constructor({ stateDir, dispatcherId = null, verify = null, pid = process.pid }) {
-    Object.assign(this, { stateDir, verify, pid });
+  constructor({ stateDir, dispatcherId = null, verify = null, pid = process.pid, openGates = false }) {
+    Object.assign(this, { stateDir, verify, pid, openGates }); // openGates exists for tests of other rules; the service never sets it.
     this.file = path.join(stateDir, 'assignments.json'); this.charterFile = path.join(stateDir, 'coordinator-charter.json'); this.lockFile = path.join(stateDir, 'dispatcher.lock'); this.cutoverFile = path.join(stateDir, 'cutover.json');
     this.tasks = new Map(); this.dispatcherId = dispatcherId; this.charter = DEFAULT_CHARTER; this.readOnly = null; this.cutover = { approved: null };
   }
@@ -90,16 +129,19 @@ export class Assignments {
   open() { return [...this.tasks.values()].filter(task => task.status !== 'closed'); }
 
   // Cutover from the old dispatcher (Opus) to this Sonnet coordinator. Real work is refused until all three hold.
-  gates(identity) {
+  gates(identity, kind = null) {
     const model = identity?.observed || '';
     const proof = [...this.tasks.values()].find(task => task.proof && task.status === 'closed');
+    const worker = kind && WORKER_KINDS.includes(kind) ? [...this.tasks.values()].find(task => task.proof && task.status === 'closed' && task.workerKind === kind) : null;
     return [
       { name: 'model', ok: identity?.provider === 'claude' && /sonnet/i.test(model), detail: model ? `the running process reports ${model}` : 'no model reported by the running process yet' },
       { name: 'proof', ok: !!proof, detail: proof ? `proof task "${proof.title}" closed with an independent verdict` : 'no proof task has been closed yet' },
       { name: 'owner', ok: !!this.cutover.approved, detail: this.cutover.approved ? `approved by ${this.cutover.approved.by} at ${this.cutover.approved.at}` : 'the owner has not approved the cutover' },
+      // Each kind of worker (Claude, Codex, OpenCode, Bob) must itself have closed a proof task, on the same evidence rules, before real work goes to it.
+      ...(kind && WORKER_KINDS.includes(kind) ? [{ name: 'worker', ok: !!worker, detail: worker ? `a ${kind} worker closed proof task "${worker.title}"` : `no ${kind} worker has closed a proof task yet` }] : []),
     ];
   }
-  ready(identity) { return this.gates(identity).every(gate => gate.ok); }
+  ready(identity, kind = null) { return this.gates(identity, kind).every(gate => gate.ok); }
   async approveCutover(by, identity) {
     this.writable();
     const failing = this.gates(identity).filter(gate => gate.name !== 'owner' && !gate.ok);
@@ -107,21 +149,33 @@ export class Assignments {
     this.cutover = { approved: { by: String(by || 'owner'), at: new Date().toISOString() } }; await saveJson(this.cutoverFile, this.cutover); this.onChange?.(); return this.cutover;
   }
 
-  async assign({ id = randomUUID().slice(0, 8), title, intent, taskText, repo, branch, baseSha, owner, link, proof = false }, { identity = null } = {}) {
+  async assign({ id = randomUUID().slice(0, 8), title, intent, taskText, repo, branch, baseSha, owner, link, suites, proof }, { identity = null, workerKind = null } = {}) {
     this.writable();
+    if (proof) throw new Error('A proof task is started by the owner from the Coordinator panel, never by the coordinator.');
+    if (!this.openGates && !this.ready(identity, workerKind)) throw conflict(`Real work is refused until the cutover gates pass (${this.gates(identity, workerKind).filter(gate => !gate.ok).map(gate => gate.name).join(', ')}). The owner starts a proof task first.`);
+    return this.create({ id, title, intent, taskText, repo, branch, baseSha, owner, link, suites }, { proof: false, workerKind });
+  }
+  // The owner's act, with a fixed task text. Always allowed, so the first proof can run before anything else is.
+  async startProof({ id = randomUUID().slice(0, 8), owner, repo, suites }, { workerKind = null } = {}) {
+    this.writable();
+    if (!REPO.test(String(repo || ''))) throw new Error('Name the repository for the proof as owner/name.');
+    return this.create({ id, ...proofSpec({ id, repo }), owner, repo, suites }, { proof: true, workerKind });
+  }
+  async create({ id, title, intent, taskText, repo, branch, baseSha, owner, link, suites }, { proof, workerKind }) {
     if (!String(title || '').trim()) throw new Error('Give the task a short title.');
     if (!String(intent || '').trim()) throw new Error("Quote the owner's own words as the requirement before assigning.");
     if (!String(taskText || '').trim()) throw new Error('Give the task text the worker will be sent. It is kept as the original task, apart from any later message.');
     if (!String(owner || '').trim()) throw new Error('Name the one owner (a chat or a person).');
     if (baseSha != null && !SHA.test(baseSha)) throw new Error('The base commit must be a hexadecimal commit ID.');
     if (repo != null && !REPO.test(repo)) throw new Error('Name the repository as owner/name.');
-    if (proof !== true && !this.ready(identity)) throw conflict(`Real work is refused until the cutover gates pass (${this.gates(identity).filter(gate => !gate.ok).map(gate => gate.name).join(', ')}). Use a proof task first.`);
+    const checked = normalizeSuites(suites);
+    if (!repo) throw new Error('Name the repository as owner/name: the suites are verified on GitHub.');
     const existing = this.tasks.get(id);
     if (existing) {
       if (existing.status !== 'closed' && existing.dispatcher !== this.dispatcherId) throw conflict(`Another dispatcher (${existing.dispatcher}) holds this task.`);
       throw conflict('This assignment already exists; record receipts on it or close it.');
     }
-    const task = { id, title: title.trim(), intent: intent.trim(), taskText: taskText.trim().slice(0, 6000), repo: repo || null, branch: branch || null, baseSha: baseSha || null, owner: owner.trim(), link: link || null, proof: proof === true, dispatcher: this.dispatcherId, status: 'assigned', receipts: [], verdicts: [], handoff: null, created: new Date().toISOString() };
+    const task = { id, title: title.trim(), intent: intent.trim(), taskText: taskText.trim().slice(0, 6000), repo, branch: branch || null, baseSha: baseSha || null, owner: owner.trim(), workerKind: workerKind || 'person', suites: checked, link: link || null, proof, dispatcher: this.dispatcherId, status: 'assigned', receipts: [], verdicts: [], handoff: null, created: new Date().toISOString() };
     this.tasks.set(id, task); await this.save(); return task;
   }
   held(task) { this.writable(); if (task.status === 'closed') throw new Error('This assignment is closed.'); if (task.dispatcher !== this.dispatcherId) throw conflict(`Another dispatcher (${task.dispatcher}) holds this task.`); }
@@ -150,7 +204,8 @@ export class Assignments {
     let github = null, verifyError = null;
     if (this.verify && task.repo) { try { github = await this.verify({ repo: task.repo, sha }); } catch (error) { verifyError = error.message; } }
     else verifyError = task.repo ? 'No GitHub verifier is configured (set GITHUB_TOKEN in .env).' : 'The task has no repository, so its checks cannot be verified on GitHub.';
-    const disagreements = github ? reported.filter(claim => { const real = github.find(run => run.name === claim.name); return !real || real.result !== claim.result; }).map(claim => ({ name: claim.name, reported: claim.result, github: github.find(run => run.name === claim.name)?.result || 'NOT FOUND' })) : [];
+    if (github) github = applyEvidence(task.suites || [], github);
+    const disagreements = github ? reported.filter(claim => { const real = github.find(run => run.name === claim.name); return !real || real.result !== claim.result; }).map(claim => ({ name: claim.name, reported: claim.result, github: (run => run && !run.missing ? run.result : 'NOT FOUND')(github.find(item => item.name === claim.name)) })) : [];
     const receipt = { sha: sha.toLowerCase(), link: link || null, checks: github || reported, reported, verified: !!github, verifyError, disagreements, negativeSeenFailing: negativeSeenFailing === true, note: note || null, at: new Date().toISOString() };
     task.receipts.push(receipt); task.status = 'receipted'; task.stalled = null; await this.save(); return receipt;
   }
@@ -189,7 +244,7 @@ export class Assignments {
   }
   // What a new or restarted coordinator reads first, so state, charter and ownership survive it.
   orientation(identity = null) {
-    const rows = this.open().map(task => `- ${task.id} [${task.status}${task.proof ? ', proof' : ''}] ${task.title}: owner ${task.owner}; dispatcher ${task.dispatcher}${task.dispatcher === this.dispatcherId ? ' (you)' : ''}; requirement: "${task.intent}"; receipts ${task.receipts.length}, verdicts ${task.verdicts.length}${task.handoff && !task.handoff.accepted ? `; handing to ${task.handoff.to}` : ''}`);
+    const rows = this.open().map(task => `- ${task.id} [${task.status}${task.proof ? ', proof' : ''}, ${task.workerKind || 'person'}] ${task.title}: owner ${task.owner}; dispatcher ${task.dispatcher}${task.dispatcher === this.dispatcherId ? ' (you)' : ''}; requirement: "${task.intent}"; receipts ${task.receipts.length}, verdicts ${task.verdicts.length}${task.handoff && !task.handoff.accepted ? `; handing to ${task.handoff.to}` : ''}`);
     const gates = this.gates(identity).map(gate => `${gate.ok ? 'PASS' : 'NOT YET'} ${gate.name}: ${gate.detail}`).join('\n');
     return `Coordinator charter (you are ${this.dispatcherId}${this.readOnly ? `; READ ONLY: ${this.readOnly}` : ''}):\n${this.charter}\n\nCutover gates (real work is refused until all pass; a proof task is always allowed):\n${gates}\n\nOpen assignments:\n${rows.length ? rows.join('\n') : '- none'}`;
   }
